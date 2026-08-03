@@ -1,0 +1,12 @@
+*.jou
+*.log
+*.str
+.Xil/
+*.cache/
+*.gen/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.zip
+VideoFrameInterpolation - Copy/
