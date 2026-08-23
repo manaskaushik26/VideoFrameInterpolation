@@ -47,11 +47,14 @@ module conv_stage_axis #(
     input  logic                        clk,
     input  logic                        rst_n,
 
-    // weight load
-    input  logic                        w_we,
-    input  logic [$clog2(N_OUT > 1 ? N_OUT : 2)-1:0]  w_out_ch,
-    input  logic [$clog2(CH_IN > 1 ? CH_IN : 2)-1:0]  w_in_ch,
-    input  logic [9*WEIGHT_W-1:0]       w_data,
+    // AXI-Stream slave carrying this layer's kernels, DMA'd as one blob.
+    // N_OUT*CH_IN*9 beats, in the flattened (out, in, kh, kw) order of the
+    // conv*_weight_q15.bin files. `weights_loaded` rises when a full set has
+    // landed and is the signal that the layer is safe to run.
+    input  logic [WEIGHT_W-1:0]         s_wt_tdata,
+    input  logic                        s_wt_tvalid,
+    output logic                        s_wt_tready,
+    output logic                        weights_loaded,
 
     // status
     input  logic                        sat_clear,
@@ -69,6 +72,21 @@ module conv_stage_axis #(
     output logic                        m_axis_tvalid,
     input  logic                        m_axis_tready
 );
+
+    logic                  w_we;
+    logic [$clog2(N_OUT > 1 ? N_OUT : 2)-1:0] w_out_ch;
+    logic [$clog2(CH_IN > 1 ? CH_IN : 2)-1:0] w_in_ch;
+    logic [9*WEIGHT_W-1:0] w_data;
+
+    weight_loader #(
+        .WEIGHT_W (WEIGHT_W), .CH_IN (CH_IN), .N_OUT (N_OUT)
+    ) u_wl (
+        .clk (clk), .rst_n (rst_n),
+        .s_axis_tdata (s_wt_tdata), .s_axis_tvalid (s_wt_tvalid),
+        .s_axis_tready (s_wt_tready),
+        .w_we (w_we), .w_out_ch (w_out_ch), .w_in_ch (w_in_ch), .w_data (w_data),
+        .loaded (weights_loaded)
+    );
 
     logic [DATA_W-1:0] in_data;
     logic              in_last, in_valid, in_ready;

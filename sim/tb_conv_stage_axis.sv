@@ -62,10 +62,8 @@ module tb_conv_stage_axis;
     logic rst_n;
     always #5 clk = ~clk;
 
-    logic                  w_we;
-    logic [OCW-1:0]        w_out_ch;
-    logic [ICW-1:0]        w_in_ch;
-    logic [9*WEIGHT_W-1:0] w_data;
+    logic [WEIGHT_W-1:0]   wt_tdata;
+    logic                  wt_tvalid, wt_tready, weights_loaded;
     logic                  sat_clear, sat_sticky;
 
     logic [DATA_W-1:0] s_tdata;
@@ -79,7 +77,8 @@ module tb_conv_stage_axis;
         .OUT_SHIFT (SHIFT), .ACT_MODE (1)
     ) dut (
         .clk (clk), .rst_n (rst_n),
-        .w_we (w_we), .w_out_ch (w_out_ch), .w_in_ch (w_in_ch), .w_data (w_data),
+        .s_wt_tdata (wt_tdata), .s_wt_tvalid (wt_tvalid), .s_wt_tready (wt_tready),
+        .weights_loaded (weights_loaded),
         .sat_clear (sat_clear), .sat_sticky (sat_sticky),
         .s_axis_tdata (s_tdata), .s_axis_tlast (s_tlast),
         .s_axis_tvalid (s_tvalid), .s_axis_tready (s_tready),
@@ -141,19 +140,42 @@ module tb_conv_stage_axis;
         end
     endtask
 
-    task automatic load_weights();
+    // Stream the kernels in exactly as the DMA will: output channel major, then
+    // input channel, then the 9 taps -- the flattened (out, in, kh, kw) layout of
+    // the conv*_weight_q15.bin files. Randomised gaps prove the loader does not
+    // depend on a gapless stream.
+    task automatic load_weights(int gap_pct = 0);
+        int beats;
         begin
+            beats = 0;
             for (int n = 0; n < N_OUT; n++)
-                for (int k = 0; k < CH_IN; k++) begin
+                for (int k = 0; k < CH_IN; k++)
                     for (int r = 0; r < 3; r++)
                         for (int c = 0; c < 3; c++) begin
                             kern[n][k][r][c] = WEIGHT_W'($urandom);
-                            w_data[(r*3+c)*WEIGHT_W +: WEIGHT_W] = kern[n][k][r][c];
+                            while (gap_pct > 0 && ($urandom_range(99) < gap_pct)) begin
+                                wt_tvalid = 1'b0; wt_tdata = 'x;
+                                @(posedge clk); @(negedge clk);
+                            end
+                            wt_tdata  = kern[n][k][r][c];
+                            wt_tvalid = 1'b1;
+                            @(posedge clk);
+                            if (!wt_tready) $display("  ERROR: weight loader deasserted tready");
+                            beats++;
+                            @(negedge clk);
                         end
-                    w_out_ch = OCW'(n); w_in_ch = ICW'(k); w_we = 1'b1;
-                    @(posedge clk); @(negedge clk);
-                end
-            w_we = 1'b0;
+            wt_tvalid = 1'b0; wt_tdata = 'x;
+            @(posedge clk); @(negedge clk);
+
+            if (beats != N_OUT*CH_IN*9) begin
+                $display("  ERROR: streamed %0d weight beats, expected %0d",
+                         beats, N_OUT*CH_IN*9);
+                errors++;
+            end
+            if (!weights_loaded) begin
+                $display("  ERROR: weights_loaded not asserted after a full set");
+                errors++;
+            end
         end
     endtask
 
@@ -236,7 +258,7 @@ module tb_conv_stage_axis;
         stall_in = 0; stall_out = 0;
         s_tvalid = 0; s_tlast = 0; s_tdata = '0;
         m_tready = 0; sat_clear = 0;
-        w_we = 0; w_out_ch = '0; w_in_ch = '0; w_data = '0;
+        wt_tvalid = 0; wt_tdata = '0;
 
         rst_n = 0;
         repeat (3) @(posedge clk);
@@ -246,7 +268,7 @@ module tb_conv_stage_axis;
         $display("%0dx%0d  CH_IN=%0d N_OUT=%0d SHIFT=%0d  in_pkt=%0d out_pkt=%0d",
                  IMG_W, IMG_H, CH_IN, N_OUT, SHIFT, IN_BEATS, OUT_BEATS);
 
-        load_weights();
+        load_weights(30);   // with gaps
 
         $display("--- full rate ---");
         for (int f = 0; f < NFRAMES; f++) begin

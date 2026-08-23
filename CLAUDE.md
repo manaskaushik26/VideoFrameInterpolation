@@ -94,6 +94,15 @@ around two Windows-specific traps documented in the script:
                    -Defines @{TB_IMG_W=224; TB_IMG_H=224}
 ```
 
+Two failure modes `run_xsim.ps1` already handles — do not "simplify" them away:
+
+- **`xelab`'s exit code is not trustworthy.** It builds the snapshot, then tries to delete its
+  scratch `obj` directory, and under OneDrive that intermittently fails with "Access is denied",
+  making it exit non-zero *after succeeding*. The script judges success by whether the snapshot
+  exists. This is intermittent, so it looks like a flaky subset of configurations failing.
+- **Never use `2>&1` on the Vivado executables.** PowerShell 5.1 wraps native stderr in
+  `NativeCommandError` records, so any tool that merely prints a warning looks like a failure.
+
 Do not hand-roll `xvlog` calls with defines on the command line. PowerShell 5.1 mangles native
 arguments containing `=`, turning `-d W=224` into a define plus a phantom filename; and
 `Set-Content -Encoding utf8` writes a BOM that corrupts the first line of an `-f` options file,
@@ -277,6 +286,13 @@ It earned itself immediately by catching non-compliant stimulus in its own testb
 
 None of these bugs are observable at full rate — which is exactly why the old design passed its
 testbenches and hung on hardware. **Always run AXI tests with stalls on both sides.**
+
+**`weight_loader.sv`** streams a layer's kernels in over AXI-Stream, replacing per-value MMIO
+writes (the host code did 186,624 writes per load, against an AXI-Lite interface the IP did not
+have — §7). Beat order is **output channel major, then input channel, then the 9 taps**, which is
+exactly the flattened `(out, in, kh, kw)` layout of `conv*_weight_q15.bin` (§4.3) — so the host DMAs
+the file as-is. **Never add reordering here**; it would silently transpose every kernel.
+`N_OUT*CH_IN*9` beats per layer; `weights_loaded` rises when a full set has landed.
 
 ### Assumed dataflow (decided 2026-08-23, revisit if wrong)
 

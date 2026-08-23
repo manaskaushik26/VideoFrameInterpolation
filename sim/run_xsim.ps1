@@ -49,13 +49,34 @@ try {
     $tag = if ($Defines.Count) { ($Defines.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ' } else { "defaults" }
     Write-Output "=== $Tb [$tag] ==="
 
-    $log = xvlog --nolog -f $optsFile 2>&1
-    if ($LASTEXITCODE -ne 0) { Write-Output ($log | Select-String -Pattern 'ERROR' | Select-Object -First 15); Write-Output "XVLOG FAILED"; exit 1 }
+    # No 2>&1 on these. PowerShell 5.1 wraps a native command's stderr in
+    # NativeCommandError records, which makes any tool that merely prints a
+    # warning look like a failure -- xelab did exactly that, and only for
+    # parameter combinations that happened to emit one. Let the tools write
+    # their own .log files instead and read those on failure.
+    $log = xvlog -f $optsFile
+    if ($LASTEXITCODE -ne 0) {
+        Write-Output ($log | Select-String -Pattern 'ERROR' | Select-Object -First 15)
+        if (Test-Path xvlog.log) { Get-Content xvlog.log | Select-String 'ERROR' | Select-Object -First 15 }
+        Write-Output "XVLOG FAILED"; exit 1
+    }
 
-    $log = xelab --nolog -debug typical $Tb -s $snap 2>&1
-    if ($LASTEXITCODE -ne 0) { Write-Output ($log | Select-String -Pattern 'ERROR' | Select-Object -First 15); Write-Output "XELAB FAILED"; exit 1 }
+    # xelab's exit code is not trustworthy here. It builds the snapshot, then
+    # tries to delete its scratch obj directory, and on this machine that
+    # intermittently fails with "Access is denied" -- the repo lives under
+    # OneDrive, whose sync client holds file handles. xelab then exits non-zero
+    # despite having succeeded. Judge it on whether the snapshot actually
+    # exists, and only report failure if it does not.
+    $log = xelab -debug typical $Tb -s $snap
+    $built = (Test-Path (Join-Path "xsim.dir" $snap)) -or
+             ($log | Select-String -Quiet 'Built simulation snapshot')
+    if (-not $built) {
+        Write-Output ($log | Select-String -Pattern 'ERROR' | Select-Object -First 15)
+        if (Test-Path xelab.log) { Get-Content xelab.log | Select-String 'ERROR' | Select-Object -First 15 }
+        Write-Output "XELAB FAILED"; exit 1
+    }
 
-    $out = xsim $snap --nolog -runall 2>&1
+    $out = xsim $snap --nolog -runall
     $out | Where-Object { $_ -notmatch '^\s*$' -and $_ -notmatch '^(INFO|WARNING)' }
     if ($LASTEXITCODE -ne 0 -and -not $KeepGoing) { exit 1 }
 }
