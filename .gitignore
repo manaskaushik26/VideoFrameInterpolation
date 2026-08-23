@@ -10,3 +10,7 @@
 *.sim/
 *.zip
 VideoFrameInterpolation - Copy/
+
+*.dcp
+.claude/
+*.lnk
