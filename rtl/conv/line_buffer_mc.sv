@@ -41,14 +41,31 @@
 // Padding and tick space match line_buffer_3x3: (IMG_H+1) x (IMG_W+1) x C, with
 // the extra row and column supplying the zero border and consuming no input.
 //
+// Channel count is runtime, not a parameter
+// ----------------------------------------
+// One bitstream must run all six layers, whose input channel counts differ
+// (6, 32, 64, 128), so MAX_CH only sizes the memories and cfg_channels selects
+// how many are actually used. Spatial size stays a parameter: every layer is
+// stride 1 with `same` padding, so IMG_W/IMG_H are identical throughout the
+// network.
+//
+// Addressing uses MAX_CH rather than cfg_channels as the column stride. That
+// wastes storage when cfg_channels < MAX_CH, but keeps the address a shift
+// instead of a runtime multiply, which would otherwise land on the BRAM
+// address path.
+//
+// cfg_channels must be stable while a frame is in flight; it defines the frame.
+//
 module line_buffer_mc #(
     parameter int DATA_W   = 16,
     parameter int IMG_W    = 112,
     parameter int IMG_H    = 112,
-    parameter int CHANNELS = 6
+    parameter int MAX_CH   = 8
 )(
     input  logic                    clk,
     input  logic                    rst_n,
+
+    input  logic [$clog2(MAX_CH+1)-1:0] cfg_channels,
 
     input  logic [DATA_W-1:0]       s_data,
     input  logic                    s_valid,
@@ -58,7 +75,7 @@ module line_buffer_mc #(
     // Index of the channel this window belongs to. Exposed so a layer can select
     // the matching kernel without keeping a second copy of this counter, which
     // would be free to drift out of step with the window stream.
-    output logic [((CHANNELS <= 1) ? 1 : $clog2(CHANNELS))-1:0] m_ch,
+    output logic [$clog2(MAX_CH > 1 ? MAX_CH : 2)-1:0] m_ch,
     output logic                    m_first,      // channel 0 of this pixel
     output logic                    m_last_ch,    // channel C-1 of this pixel
     output logic                    m_last_frame, // final channel of final pixel
@@ -68,13 +85,16 @@ module line_buffer_mc #(
 
     localparam int CW     = $clog2(IMG_W + 1);
     localparam int RW     = $clog2(IMG_H + 1);
-    localparam int CHW    = (CHANNELS <= 1) ? 1 : $clog2(CHANNELS);
-    localparam int DEPTH  = IMG_W * CHANNELS;
+    localparam int CHW    = $clog2(MAX_CH > 1 ? MAX_CH : 2);
+    localparam int DEPTH  = IMG_W * MAX_CH;
     localparam int ADDR_W = (DEPTH <= 1) ? 1 : $clog2(DEPTH);
 
-    localparam logic [CW-1:0]  C_END  = CW'(IMG_W);
-    localparam logic [RW-1:0]  R_END  = RW'(IMG_H);
-    localparam logic [CHW-1:0] CH_END = CHW'(CHANNELS - 1);
+    localparam logic [CW-1:0] C_END = CW'(IMG_W);
+    localparam logic [RW-1:0] R_END = RW'(IMG_H);
+
+    // Runtime last-channel index.
+    logic [CHW-1:0] ch_end;
+    assign ch_end = CHW'(cfg_channels - 1);
 
     // ---------------- stage A: counters and read issue ----------------
     logic [CHW-1:0] ch;
@@ -85,7 +105,7 @@ module line_buffer_mc #(
     assign in_image = (ir < R_END) && (ic < C_END);
 
     logic [ADDR_W-1:0] addr;
-    assign addr = (ic < C_END) ? ADDR_W'(ic * CHANNELS + ch) : '0;
+    assign addr = (ic < C_END) ? ADDR_W'(ic * MAX_CH + ch) : '0;
 
     // ---------------- stage B: registered read data ----------------
     logic [CHW-1:0]    chq;
@@ -119,8 +139,8 @@ module line_buffer_mc #(
     assign s_ready      = in_image && b_free;
     assign m_ch         = chq;
     assign m_first      = (chq == '0);
-    assign m_last_ch    = (chq == CH_END);
-    assign m_last_frame = b_out && (irq == R_END) && (icq == C_END) && (chq == CH_END);
+    assign m_last_ch    = (chq == ch_end);
+    assign m_last_frame = b_out && (irq == R_END) && (icq == C_END) && (chq == ch_end);
 
     // Line stores. bufB holds row ir-1, bufA row ir-2, both indexed by
     // (column, channel).
@@ -128,8 +148,8 @@ module line_buffer_mc #(
     logic [DATA_W-1:0] bufB [DEPTH];
 
     // Column history, one C-deep pair per row tap.
-    logic [DATA_W-1:0] d1m [3][CHANNELS];
-    logic [DATA_W-1:0] d2m [3][CHANNELS];
+    logic [DATA_W-1:0] d1m [3][MAX_CH];
+    logic [DATA_W-1:0] d2m [3][MAX_CH];
 
     logic col_in_image;
     assign col_in_image = (icq < C_END);
@@ -181,7 +201,7 @@ module line_buffer_mc #(
                 b_vld  <= 1'b1;
 
                 // -- advance stage A: channel fastest, then column, then row
-                if (ch != CH_END) begin
+                if (ch != ch_end) begin
                     ch <= ch + 1'b1;
                 end else begin
                     ch <= '0;

@@ -36,6 +36,8 @@
 //      threshold was Q1.15, so the two were never comparable. Everything
 //      crossing this module's boundary is Q1.15.
 //
+// The requantisation shift is a runtime input, not a parameter -- see cfg_shift.
+//
 // ACC_W sizing: a product is DATA_W+WEIGHT_W bits, and summing 9*C of them needs
 // ceil(log2(9*C)) guard bits on top -- 11 for C=128. The default 48 covers
 // 32 + 11 with room to spare; assert on it rather than trusting it.
@@ -44,17 +46,22 @@ module conv_mac_3x3 #(
     parameter int DATA_W    = 16,  // activation width, Q1.15
     parameter int WEIGHT_W  = 16,  // weight width, Q1.15
     parameter int ACC_W     = 48,
-    // Right shift applied to the Q2.30 accumulator on the way back to Q1.15.
-    // WEIGHT_W-1 is the arithmetically neutral value; each layer will want its
-    // own, because a fixed shift only suits one layer's dynamic range. Measured
-    // on this block: with uniformly random Q1.15 operands, a 9-tap sum over many
-    // channels saturates roughly 65% of the time at the neutral shift. Trained
-    // weights are far smaller than full scale, so the real per-layer shift is a
-    // property of the trained model and must come from it.
-    parameter int OUT_SHIFT = WEIGHT_W - 1
+    parameter int SHIFT_W   = 6     // width of cfg_shift; 6 bits covers 0..63
 )(
     input  logic                        clk,
     input  logic                        rst_n,
+
+    // Right shift applied to the Q2.30 accumulator on the way back to Q1.15.
+    // WEIGHT_W-1 is the arithmetically neutral value, but each layer needs its
+    // own: a shift too small clips and destroys the activation, too large throws
+    // away precision. Measured on this block, uniformly random Q1.15 operands
+    // saturate ~65% of the time at the neutral shift.
+    //
+    // Runtime rather than a parameter because one bitstream must run all six
+    // layers, and their dynamic ranges differ. Hold it stable while a pixel is
+    // in flight -- it is sampled with the completed accumulator, so changing it
+    // mid-pixel requantises with a value the accumulation did not assume.
+    input  logic [SHIFT_W-1:0]          cfg_shift,
 
     input  logic [9*DATA_W-1:0]         s_window,    // from line_buffer_3x3
     input  logic [9*WEIGHT_W-1:0]       s_weights,
@@ -123,10 +130,19 @@ module conv_mac_3x3 #(
 
     // Round-half-up, then saturate. Both happen at ACC_W, before narrowing.
     // OUT_SHIFT == 0 means no scaling, and then there is no rounding bit to add.
+    // Runtime shift, so this is a barrel shifter rather than a wiring change.
+    // The rounding bit is 1 << (shift-1), and a shift of zero means no scaling
+    // and therefore no rounding bit.
     logic signed [ACC_W-1:0] rounded;
+    logic signed [ACC_W-1:0] round_bias;
     always_comb begin
-        if (OUT_SHIFT == 0) rounded = acc_final;
-        else                rounded = (acc_final + (ACC_W'(1) <<< (OUT_SHIFT-1))) >>> OUT_SHIFT;
+        if (cfg_shift == '0) begin
+            round_bias = '0;
+            rounded    = acc_final;
+        end else begin
+            round_bias = ACC_W'(1) <<< (cfg_shift - 1);
+            rounded    = (acc_final + round_bias) >>> cfg_shift;
+        end
     end
 
     logic sat_hi, sat_lo;

@@ -38,14 +38,17 @@ module conv_stage_axis #(
     parameter int WEIGHT_W  = 16,
     parameter int IMG_W     = 112,
     parameter int IMG_H     = 112,
-    parameter int CH_IN     = 6,
+    parameter int MAX_CH    = 8,
     parameter int N_OUT     = 4,
     parameter int ACC_W     = 48,
-    parameter int OUT_SHIFT = WEIGHT_W - 1,
+    parameter int SHIFT_W   = 6,
     parameter int ACT_MODE  = 1
 )(
     input  logic                        clk,
     input  logic                        rst_n,
+
+    input  logic [$clog2(MAX_CH+1)-1:0] cfg_channels,
+    input  logic [SHIFT_W-1:0]          cfg_shift,
 
     // AXI-Stream slave carrying this layer's kernels, DMA'd as one blob.
     // N_OUT*CH_IN*9 beats, in the flattened (out, in, kh, kw) order of the
@@ -75,13 +78,14 @@ module conv_stage_axis #(
 
     logic                  w_we;
     logic [$clog2(N_OUT > 1 ? N_OUT : 2)-1:0] w_out_ch;
-    logic [$clog2(CH_IN > 1 ? CH_IN : 2)-1:0] w_in_ch;
+    logic [$clog2(MAX_CH > 1 ? MAX_CH : 2)-1:0] w_in_ch;
     logic [9*WEIGHT_W-1:0] w_data;
 
     weight_loader #(
-        .WEIGHT_W (WEIGHT_W), .CH_IN (CH_IN), .N_OUT (N_OUT)
+        .WEIGHT_W (WEIGHT_W), .MAX_CH (MAX_CH), .N_OUT (N_OUT)
     ) u_wl (
         .clk (clk), .rst_n (rst_n),
+        .cfg_channels (cfg_channels),
         .s_axis_tdata (s_wt_tdata), .s_axis_tvalid (s_wt_tvalid),
         .s_axis_tready (s_wt_tready),
         .w_we (w_we), .w_out_ch (w_out_ch), .w_in_ch (w_in_ch), .w_data (w_data),
@@ -105,10 +109,11 @@ module conv_stage_axis #(
     conv_stage #(
         .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W),
         .IMG_W (IMG_W), .IMG_H (IMG_H),
-        .CH_IN (CH_IN), .N_OUT (N_OUT),
-        .ACC_W (ACC_W), .OUT_SHIFT (OUT_SHIFT), .ACT_MODE (ACT_MODE)
+        .MAX_CH (MAX_CH), .N_OUT (N_OUT),
+        .ACC_W (ACC_W), .SHIFT_W (SHIFT_W), .ACT_MODE (ACT_MODE)
     ) u_stage (
         .clk (clk), .rst_n (rst_n),
+        .cfg_channels (cfg_channels), .cfg_shift (cfg_shift),
         .w_we (w_we), .w_out_ch (w_out_ch), .w_in_ch (w_in_ch), .w_data (w_data),
         .s_data (in_data), .s_valid (in_valid), .s_ready (in_ready),
         .m_data (out_data), .m_last (out_last),

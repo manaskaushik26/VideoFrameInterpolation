@@ -48,7 +48,7 @@ module conv_layer_mc #(
     output logic                            m_last
 );
 
-    localparam int CHW = (CHANNELS <= 1) ? 1 : $clog2(CHANNELS);
+    localparam int CHW = $clog2(CHANNELS > 1 ? CHANNELS : 2);
 
     logic [9*DATA_W-1:0] win_data;
     logic [CHW-1:0]      win_ch;
@@ -56,9 +56,10 @@ module conv_layer_mc #(
     logic                win_valid, win_ready;
 
     line_buffer_mc #(
-        .DATA_W (DATA_W), .IMG_W (IMG_W), .IMG_H (IMG_H), .CHANNELS (CHANNELS)
+        .DATA_W (DATA_W), .IMG_W (IMG_W), .IMG_H (IMG_H), .MAX_CH (CHANNELS)
     ) u_lb (
         .clk (clk), .rst_n (rst_n),
+        .cfg_channels ($clog2(CHANNELS+1)'(CHANNELS)),
         .s_data (s_data), .s_valid (s_valid), .s_ready (s_ready),
         .m_window (win_data), .m_ch (win_ch),
         .m_first (win_first), .m_last_ch (win_last_ch), .m_last_frame (win_last_frame),
@@ -70,9 +71,10 @@ module conv_layer_mc #(
     assign kernel = weights[win_ch * (9*WEIGHT_W) +: 9*WEIGHT_W];
 
     conv_mac_3x3 #(
-        .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W), .ACC_W (ACC_W), .OUT_SHIFT (OUT_SHIFT)
+        .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W), .ACC_W (ACC_W)
     ) u_mac (
         .clk (clk), .rst_n (rst_n),
+        .cfg_shift (6'(OUT_SHIFT)),
         .s_window (win_data), .s_weights (kernel),
         .s_first (win_first), .s_last (win_last_ch),
         .s_tag   (win_last_frame),

@@ -91,9 +91,10 @@ module tb_conv_chain;
 
     conv_stage #(
         .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W), .IMG_W (IMG_W), .IMG_H (IMG_H),
-        .CH_IN (CH0), .N_OUT (CH1), .ACC_W (ACC_W), .OUT_SHIFT (SHIFT), .ACT_MODE (1)
+        .MAX_CH (CH0), .N_OUT (CH1), .ACC_W (ACC_W), .ACT_MODE (1)
     ) u_s1 (
         .clk (clk), .rst_n (rst_n),
+        .cfg_channels ($clog2(CH0+1)'(CH0)), .cfg_shift (6'(SHIFT)),
         .w_we (w1_we), .w_out_ch (w1_out), .w_in_ch (w1_in), .w_data (w1_data),
         .s_data (s_data), .s_valid (s_valid), .s_ready (s_ready),
         .m_data (mid_data), .m_last (mid_last), .m_valid (mid_valid), .m_ready (mid_ready),
@@ -102,9 +103,10 @@ module tb_conv_chain;
 
     conv_stage #(
         .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W), .IMG_W (IMG_W), .IMG_H (IMG_H),
-        .CH_IN (CH1), .N_OUT (CH2), .ACC_W (ACC_W), .OUT_SHIFT (SHIFT), .ACT_MODE (1)
+        .MAX_CH (CH1), .N_OUT (CH2), .ACC_W (ACC_W), .ACT_MODE (1)
     ) u_s2 (
         .clk (clk), .rst_n (rst_n),
+        .cfg_channels ($clog2(CH1+1)'(CH1)), .cfg_shift (6'(SHIFT)),
         .w_we (w2_we), .w_out_ch (w2_out), .w_in_ch (w2_in), .w_data (w2_data),
         .s_data (mid_data), .s_valid (mid_valid), .s_ready (mid_ready),
         .m_data (m_data), .m_last (m_last), .m_valid (m_valid), .m_ready (m_ready),

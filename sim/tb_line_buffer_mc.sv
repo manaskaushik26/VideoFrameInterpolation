@@ -38,9 +38,10 @@ module tb_line_buffer_mc;
     logic                m_first, m_last_ch, m_last_frame, m_valid, m_ready;
 
     line_buffer_mc #(
-        .DATA_W (DATA_W), .IMG_W (IMG_W), .IMG_H (IMG_H), .CHANNELS (CHANNELS)
+        .DATA_W (DATA_W), .IMG_W (IMG_W), .IMG_H (IMG_H), .MAX_CH (CHANNELS)
     ) dut (
         .clk (clk), .rst_n (rst_n),
+        .cfg_channels ($clog2(CHANNELS+1)'(CHANNELS)),
         .s_data (s_data), .s_valid (s_valid), .s_ready (s_ready),
         .m_window (m_window), .m_first (m_first), .m_last_ch (m_last_ch),
         .m_last_frame (m_last_frame), .m_valid (m_valid), .m_ready (m_ready)

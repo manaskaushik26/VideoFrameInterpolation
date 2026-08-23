@@ -294,6 +294,29 @@ exactly the flattened `(out, in, kh, kw)` layout of `conv*_weight_q15.bin` (§4.
 the file as-is. **Never add reordering here**; it would silently transpose every kernel.
 `N_OUT*CH_IN*9` beats per layer; `weights_loaded` rises when a full set has landed.
 
+### ⚠ BLOCKER: the weight memory does not fit at realistic channel counts
+
+`conv_layer.wmem` is declared as an unpacked array written with `w_we` and read
+combinationally on `m_ch`. **Vivado infers flip-flops for it, not LUTRAM.** Measured OOC on
+`xc7z020clg400-1`, `conv_layer`, 112x112, N_OUT=24:
+
+| MAX_CH | LUT | Registers | BRAM | DSP | Fits? |
+|---|---|---|---|---|---|
+| 8 | 14,753 | 24,022 | 1 | 216 | yes |
+| **128** | **138,248** (260%) | **457,663** (430%) | 16 | 216 | **no** |
+
+128 input channels is not optional — conv4 is 128→64. 24 x 128 x 9 x 16b = 442 Kbit of kernels, and
+as registers that is 4x the device's entire flip-flop budget.
+
+**The fix is to move `wmem` into BRAM** (~13 BRAM36, easily affordable against 140). BRAM reads are
+registered, so this adds a pipeline stage on the weight path which must be aligned against the
+window path. That is precisely the change that has broken composition twice in this repo while every
+unit test still passed — **re-run `tb_conv_layer`, `tb_conv_chain` and `tb_conv_stage_axis` after
+doing it**, and prefer carrying the alignment through `conv_mac_3x3`'s existing `s_tag` mechanism
+rather than adding a shadow counter.
+
+Timing is not the problem here: 100 MHz is met at +0.521 ns even at MAX_CH=128.
+
 ### Assumed dataflow (decided 2026-08-23, revisit if wrong)
 
 Intermediates round-trip through DDR via AXI-DMA, **one DMA transaction per layer pass**, with the PS
@@ -315,10 +338,21 @@ Two conventions these establish, both of which the old design violated:
 2. **Everything crossing a module boundary is Q1.15.** The old `syn_current` was a raw integer while
    the LIF threshold was Q1.15, so the two were never comparable.
 
-`conv_mac_3x3.OUT_SHIFT` parameterises requantisation rather than hardcoding `>>> 15`. At the
-neutral shift roughly 65% of random pixels saturate — a 9-tap sum over 128 channels of full-scale
-Q1.15 operands simply does not fit int16 — so **each layer needs its own shift, derived from the
-trained model.** Treat a hardcoded shift as a bug.
+### Runtime configuration: `cfg_channels` and `cfg_shift`
+
+**One bitstream must run all six layers**, which differ in input channel count (6, 32, 64, 128) and
+in requantisation shift. Both are therefore **runtime inputs, not parameters**. `MAX_CH` only sizes
+the memories; `cfg_channels` selects how many are used. Spatial size stays a parameter because every
+layer is stride 1 with `same` padding, so `IMG_W`/`IMG_H` are constant across the network.
+
+Both must be held stable while a frame is in flight — they define the frame.
+
+`tb_conv_stage_axis` proves it: one elaborated instance runs six different (channels, shift)
+configurations in sequence, each with its own DMA'd weights, all correct and protocol-clean.
+
+At the neutral shift roughly 65% of random pixels saturate — a 9-tap sum over 128 channels of
+full-scale Q1.15 operands simply does not fit int16 — so **each layer needs its own shift, derived
+from the trained model.** Use `sat_sticky` to tune it.
 
 **Trained weights are not needed to build or verify this.** Whether the hardware computes a
 convolution correctly is an arithmetic property; random stimulus tests it perfectly well. RTL work

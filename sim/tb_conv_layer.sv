@@ -71,10 +71,11 @@ module tb_conv_layer;
     conv_layer #(
         .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W),
         .IMG_W (IMG_W), .IMG_H (IMG_H),
-        .CH_IN (CH_IN), .N_OUT (N_OUT),
-        .ACC_W (ACC_W), .OUT_SHIFT (OUT_SHIFT)
+        .MAX_CH (CH_IN), .N_OUT (N_OUT),
+        .ACC_W (ACC_W)
     ) dut (
         .clk (clk), .rst_n (rst_n),
+        .cfg_channels ($clog2(CH_IN+1)'(CH_IN)), .cfg_shift (6'(OUT_SHIFT)),
         .w_we (w_we), .w_out_ch (w_out_ch), .w_in_ch (w_in_ch), .w_data (w_data),
         .s_data (s_data), .s_valid (s_valid), .s_ready (s_ready),
         .m_data (m_data), .m_sat (m_sat),

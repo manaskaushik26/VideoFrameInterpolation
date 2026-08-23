@@ -42,9 +42,10 @@ module tb_conv_mac_3x3;
     logic                     m_sat, m_tag, m_valid, m_ready;
 
     conv_mac_3x3 #(
-        .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W), .ACC_W (ACC_W), .OUT_SHIFT (OUT_SHIFT)
+        .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W), .ACC_W (ACC_W)
     ) dut (
         .clk (clk), .rst_n (rst_n),
+        .cfg_shift (6'(OUT_SHIFT)),
         .s_window (s_window), .s_weights (s_weights),
         .s_first (s_first), .s_last (s_last), .s_tag (s_tag),
         .s_valid (s_valid), .s_ready (s_ready),

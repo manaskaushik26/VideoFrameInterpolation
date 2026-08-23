@@ -23,18 +23,21 @@ module conv_stage #(
     parameter int WEIGHT_W  = 16,
     parameter int IMG_W     = 112,
     parameter int IMG_H     = 112,
-    parameter int CH_IN     = 6,
+    parameter int MAX_CH    = 8,
     parameter int N_OUT     = 4,
     parameter int ACC_W     = 48,
-    parameter int OUT_SHIFT = WEIGHT_W - 1,
+    parameter int SHIFT_W   = 6,
     parameter int ACT_MODE  = 1        // 0 linear, 1 ReLU
 )(
     input  logic                        clk,
     input  logic                        rst_n,
 
+    input  logic [$clog2(MAX_CH+1)-1:0] cfg_channels,
+    input  logic [SHIFT_W-1:0]          cfg_shift,
+
     input  logic                        w_we,
     input  logic [$clog2(N_OUT > 1 ? N_OUT : 2)-1:0]  w_out_ch,
-    input  logic [$clog2(CH_IN > 1 ? CH_IN : 2)-1:0]  w_in_ch,
+    input  logic [$clog2(MAX_CH > 1 ? MAX_CH : 2)-1:0] w_in_ch,
     input  logic [9*WEIGHT_W-1:0]       w_data,
 
     input  logic [DATA_W-1:0]           s_data,
@@ -64,10 +67,11 @@ module conv_stage #(
     conv_layer #(
         .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W),
         .IMG_W (IMG_W), .IMG_H (IMG_H),
-        .CH_IN (CH_IN), .N_OUT (N_OUT),
-        .ACC_W (ACC_W), .OUT_SHIFT (OUT_SHIFT)
+        .MAX_CH (MAX_CH), .N_OUT (N_OUT),
+        .ACC_W (ACC_W), .SHIFT_W (SHIFT_W)
     ) u_conv (
         .clk (clk), .rst_n (rst_n),
+        .cfg_channels (cfg_channels), .cfg_shift (cfg_shift),
         .w_we (w_we), .w_out_ch (w_out_ch), .w_in_ch (w_in_ch), .w_data (w_data),
         .s_data (s_data), .s_valid (s_valid), .s_ready (s_ready),
         .m_data (conv_data), .m_sat (conv_sat),

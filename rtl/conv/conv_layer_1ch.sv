@@ -60,9 +60,10 @@ module conv_layer_1ch #(
     );
 
     conv_mac_3x3 #(
-        .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W), .ACC_W (ACC_W), .OUT_SHIFT (OUT_SHIFT)
+        .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W), .ACC_W (ACC_W)
     ) u_mac (
         .clk (clk), .rst_n (rst_n),
+        .cfg_shift (6'(OUT_SHIFT)),
         .s_window (win_data), .s_weights (weights),
         .s_first (1'b1), .s_last (1'b1),          // one channel: every beat completes a pixel
         .s_tag   (win_last),

@@ -30,11 +30,15 @@
 //
 module weight_loader #(
     parameter int WEIGHT_W = 16,
-    parameter int CH_IN    = 6,
+    parameter int MAX_CH   = 8,
     parameter int N_OUT    = 4
 )(
     input  logic                        clk,
     input  logic                        rst_n,
+
+    // How many input channels this layer actually has. The beat count per layer
+    // is N_OUT*cfg_channels*9, so this must match what the host DMAs.
+    input  logic [$clog2(MAX_CH+1)-1:0] cfg_channels,
 
     input  logic [WEIGHT_W-1:0]         s_axis_tdata,
     input  logic                        s_axis_tvalid,
@@ -43,14 +47,14 @@ module weight_loader #(
     // to conv_layer's weight port
     output logic                        w_we,
     output logic [$clog2(N_OUT > 1 ? N_OUT : 2)-1:0]  w_out_ch,
-    output logic [$clog2(CH_IN > 1 ? CH_IN : 2)-1:0]  w_in_ch,
+    output logic [$clog2(MAX_CH > 1 ? MAX_CH : 2)-1:0] w_in_ch,
     output logic [9*WEIGHT_W-1:0]       w_data,
 
     output logic                        loaded    // full set written
 );
 
     localparam int OCW = $clog2(N_OUT > 1 ? N_OUT : 2);
-    localparam int ICW = $clog2(CH_IN > 1 ? CH_IN : 2);
+    localparam int ICW = $clog2(MAX_CH > 1 ? MAX_CH : 2);
 
     logic [3:0]     tap;      // 0..8
     logic [ICW-1:0] in_ch;
@@ -86,7 +90,7 @@ module weight_loader #(
                     w_out_ch <= out_ch;
                     w_in_ch  <= in_ch;
 
-                    if (int'(in_ch) == CH_IN-1) begin
+                    if (in_ch == ICW'(cfg_channels - 1)) begin
                         in_ch <= '0;
                         if (int'(out_ch) == N_OUT-1) begin
                             out_ch <= '0;

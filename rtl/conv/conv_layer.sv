@@ -44,18 +44,24 @@ module conv_layer #(
     parameter int WEIGHT_W  = 16,
     parameter int IMG_W     = 112,
     parameter int IMG_H     = 112,
-    parameter int CH_IN     = 6,
-    parameter int N_OUT     = 4,
+    parameter int MAX_CH    = 8,   // sizes the line buffer and weight memory
+    parameter int N_OUT     = 4,   // physical MAC instances; 24 max on 220 DSPs
     parameter int ACC_W     = 48,
-    parameter int OUT_SHIFT = WEIGHT_W - 1
+    parameter int SHIFT_W   = 6
 )(
     input  logic                        clk,
     input  logic                        rst_n,
 
+    // Runtime layer configuration. Both must be stable while a frame is in
+    // flight. See line_buffer_mc and conv_mac_3x3 for why these are not
+    // parameters: one bitstream has to run all six layers.
+    input  logic [$clog2(MAX_CH+1)-1:0] cfg_channels,
+    input  logic [SHIFT_W-1:0]          cfg_shift,
+
     // weight load port
     input  logic                        w_we,
     input  logic [$clog2(N_OUT > 1 ? N_OUT : 2)-1:0]  w_out_ch,
-    input  logic [$clog2(CH_IN > 1 ? CH_IN : 2)-1:0]  w_in_ch,
+    input  logic [$clog2(MAX_CH > 1 ? MAX_CH : 2)-1:0] w_in_ch,
     input  logic [9*WEIGHT_W-1:0]       w_data,
 
     // pixel stream in: raster order, channel-minor
@@ -71,7 +77,7 @@ module conv_layer #(
     output logic                        m_last
 );
 
-    localparam int CHW = (CH_IN <= 1) ? 1 : $clog2(CH_IN);
+    localparam int CHW = $clog2(MAX_CH > 1 ? MAX_CH : 2);
 
     logic [9*DATA_W-1:0] win_data;
     logic [CHW-1:0]      win_ch;
@@ -79,9 +85,10 @@ module conv_layer #(
     logic                win_valid, win_ready;
 
     line_buffer_mc #(
-        .DATA_W (DATA_W), .IMG_W (IMG_W), .IMG_H (IMG_H), .CHANNELS (CH_IN)
+        .DATA_W (DATA_W), .IMG_W (IMG_W), .IMG_H (IMG_H), .MAX_CH (MAX_CH)
     ) u_lb (
         .clk (clk), .rst_n (rst_n),
+        .cfg_channels (cfg_channels),
         .s_data (s_data), .s_valid (s_valid), .s_ready (s_ready),
         .m_window (win_data), .m_ch (win_ch),
         .m_first (win_first), .m_last_ch (win_last_ch), .m_last_frame (win_last_frame),
@@ -89,7 +96,7 @@ module conv_layer #(
     );
 
     // Kernels, indexed [output channel][input channel].
-    logic [9*WEIGHT_W-1:0] wmem [N_OUT][CH_IN];
+    logic [9*WEIGHT_W-1:0] wmem [N_OUT][MAX_CH];
 
     always_ff @(posedge clk) begin
         if (w_we) wmem[w_out_ch][w_in_ch] <= w_data;
@@ -108,9 +115,10 @@ module conv_layer #(
         for (n = 0; n < N_OUT; n++) begin : g_mac
             conv_mac_3x3 #(
                 .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W),
-                .ACC_W (ACC_W), .OUT_SHIFT (OUT_SHIFT)
+                .ACC_W (ACC_W), .SHIFT_W (SHIFT_W)
             ) u_mac (
                 .clk (clk), .rst_n (rst_n),
+                .cfg_shift (cfg_shift),
                 .s_window  (win_data),
                 .s_weights (wmem[n][win_ch]),
                 .s_first   (win_first),
