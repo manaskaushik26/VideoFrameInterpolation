@@ -54,7 +54,13 @@ foreach ($m in $Modules) {
         $inc += @("-y", $d.FullName)
     }
 
-    $out = & $verilator --lint-only -Wall -Wno-DECLFILENAME @inc --top-module $m $src.FullName 2>&1
+    # -Wno-PINCONNECTEMPTY allows `.pin()` -- an explicitly unconnected port --
+    # while PINMISSING (a port omitted entirely) stays an error. That is the
+    # distinction that matters here: deliberate non-use is fine and is always
+    # commented; a silently dropped signal is the defect class that produced the
+    # constant-zero design, and it still fails the lint.
+    $out = & $verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-PINCONNECTEMPTY `
+                        @inc --top-module $m $src.FullName 2>&1
     if ($LASTEXITCODE -eq 0) {
         "{0,-24} clean" -f $m
     } else {

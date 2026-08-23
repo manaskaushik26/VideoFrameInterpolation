@@ -23,18 +23,26 @@
 // layers, since a 112x112x64 map is 12.8 Mbit and cannot stay on chip -- is the
 // sequencer's problem, not this module's.
 //
-// Weight storage
-// --------------
-// wmem[n][k] holds the 9-tap kernel for output channel n, input channel k, and
-// is read combinationally on the window stream's m_ch. That infers LUTRAM:
-// 9*16 = 144 bits x CH_IN deep per MAC. At CH_IN=64 that is ~144 LUTs per MAC,
-// ~3.5k LUTs at N_OUT=24, which fits comfortably in 53k.
+// Weight storage: one simple dual-port BRAM per MAC
+// -------------------------------------------------
+// Each MAC has its own kernel memory, MAX_CH deep and 9*WEIGHT_W wide, written
+// by the loader and read on the window stream's channel index.
 //
-// At CH_IN=128 this doubles and BRAM becomes preferable -- but BRAM reads are
-// registered, so the window would need a matching delay stage. Do that only when
-// the LUT budget actually demands it, and re-run the integration testbench when
-// you do: adding a pipeline stage on one of two converging paths is exactly the
-// change that breaks composition while every unit test still passes.
+// These must be BRAM. An earlier version declared them as arrays read
+// combinationally, expecting LUTRAM; Vivado inferred flip-flops instead, and at
+// MAX_CH=128, N_OUT=24 that measured 138,248 LUT (260% of the device) and
+// 457,663 registers (430%) -- 24 x 128 x 9 x 16b is 442 Kbit of kernels. As
+// BRAM the same storage is ~48 BRAM36 against 140 available.
+//
+// The registered read costs no latency and needs no alignment stage, because
+// the read is issued from line_buffer_mc's *stage-A* channel index (m_rd_ch,
+// enabled by m_rd_en) rather than the window's own m_ch. Stage A runs exactly
+// one cycle ahead of the window, so the BRAM output lands in the same cycle as
+// the window it belongs to. When the pipeline stalls, m_rd_en is low and the
+// BRAM holds -- which is correct, because stage B is holding too.
+//
+// Do not "simplify" this to read on m_ch. That would be a cycle late, and every
+// output pixel would be convolved with the previous channel's kernel.
 //
 // Weights load through a simple write port. DMA loading (PROJECT_CONTEXT.md
 // section 11 step 4, replacing 186k MMIO writes) wraps this later.
@@ -80,7 +88,8 @@ module conv_layer #(
     localparam int CHW = $clog2(MAX_CH > 1 ? MAX_CH : 2);
 
     logic [9*DATA_W-1:0] win_data;
-    logic [CHW-1:0]      win_ch;
+    logic [CHW-1:0]      win_rd_ch;
+    logic                win_rd_en;
     logic                win_first, win_last_ch, win_last_frame;
     logic                win_valid, win_ready;
 
@@ -90,17 +99,13 @@ module conv_layer #(
         .clk (clk), .rst_n (rst_n),
         .cfg_channels (cfg_channels),
         .s_data (s_data), .s_valid (s_valid), .s_ready (s_ready),
-        .m_window (win_data), .m_ch (win_ch),
+        // m_ch is deliberately unused: the weight BRAMs are addressed from the
+        // early m_rd_ch instead, which is a cycle ahead and therefore aligned.
+        .m_window (win_data), .m_ch (),
         .m_first (win_first), .m_last_ch (win_last_ch), .m_last_frame (win_last_frame),
-        .m_valid (win_valid), .m_ready (win_ready)
+        .m_valid (win_valid), .m_ready (win_ready),
+        .m_rd_ch (win_rd_ch), .m_rd_en (win_rd_en)
     );
-
-    // Kernels, indexed [output channel][input channel].
-    logic [9*WEIGHT_W-1:0] wmem [N_OUT][MAX_CH];
-
-    always_ff @(posedge clk) begin
-        if (w_we) wmem[w_out_ch][w_in_ch] <= w_data;
-    end
 
     // Every MAC is driven identically apart from its kernel, so their handshakes
     // move in lockstep. Rather than rely on that and read instance 0, the status
@@ -113,6 +118,17 @@ module conv_layer #(
     genvar n;
     generate
         for (n = 0; n < N_OUT; n++) begin : g_mac
+            // One SDP BRAM per MAC: written by the loader, read a cycle early
+            // from the line buffer's stage-A index so the output aligns with the
+            // window with no delay stage.
+            logic [9*WEIGHT_W-1:0] wmem [MAX_CH];
+            logic [9*WEIGHT_W-1:0] wrd;
+
+            always_ff @(posedge clk) begin
+                if (w_we && (int'(w_out_ch) == n)) wmem[w_in_ch] <= w_data;
+                if (win_rd_en)                     wrd <= wmem[win_rd_ch];
+            end
+
             conv_mac_3x3 #(
                 .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W),
                 .ACC_W (ACC_W), .SHIFT_W (SHIFT_W)
@@ -120,7 +136,7 @@ module conv_layer #(
                 .clk (clk), .rst_n (rst_n),
                 .cfg_shift (cfg_shift),
                 .s_window  (win_data),
-                .s_weights (wmem[n][win_ch]),
+                .s_weights (wrd),
                 .s_first   (win_first),
                 .s_last    (win_last_ch),
                 .s_tag     (win_last_frame),

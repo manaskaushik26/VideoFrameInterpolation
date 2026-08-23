@@ -63,7 +63,10 @@ module conv_layer_mc #(
         .s_data (s_data), .s_valid (s_valid), .s_ready (s_ready),
         .m_window (win_data), .m_ch (win_ch),
         .m_first (win_first), .m_last_ch (win_last_ch), .m_last_frame (win_last_frame),
-        .m_valid (win_valid), .m_ready (win_ready)
+        .m_valid (win_valid), .m_ready (win_ready),
+        // This wrapper selects its kernel combinationally from a flat port, so
+        // it has no per-channel memory to read early.
+        .m_rd_ch (), .m_rd_en ()
     );
 
     // Kernel for the channel currently on the window stream.

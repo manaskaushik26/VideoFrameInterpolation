@@ -294,28 +294,30 @@ exactly the flattened `(out, in, kh, kw)` layout of `conv*_weight_q15.bin` (§4.
 the file as-is. **Never add reordering here**; it would silently transpose every kernel.
 `N_OUT*CH_IN*9` beats per layer; `weights_loaded` rises when a full set has landed.
 
-### ⚠ BLOCKER: the weight memory does not fit at realistic channel counts
+### The full layer fits, measured at the worst-case shape
 
-`conv_layer.wmem` is declared as an unpacked array written with `w_we` and read
-combinationally on `m_ch`. **Vivado infers flip-flops for it, not LUTRAM.** Measured OOC on
-`xc7z020clg400-1`, `conv_layer`, 112x112, N_OUT=24:
+`conv_layer` at 112x112, **MAX_CH=128, N_OUT=24** — the conv4 shape, which is the hardest one —
+synthesised OOC on `xc7z020clg400-1`:
 
-| MAX_CH | LUT | Registers | BRAM | DSP | Fits? |
-|---|---|---|---|---|---|
-| 8 | 14,753 | 24,022 | 1 | 216 | yes |
-| **128** | **138,248** (260%) | **457,663** (430%) | 16 | 216 | **no** |
+| | Used | Available | |
+|---|---|---|---|
+| DSP48E1 | **216** | 220 | 98% — N_OUT=24 is the hard ceiling |
+| LUT | 16,625 | 53,200 | 31% |
+| Registers | 15,351 | 106,400 | 14% |
+| Block RAM | 64 | 140 | 46% |
+| **Timing @ 100 MHz** | **+0.524 ns** | | **0 failing endpoints** |
 
-128 input channels is not optional — conv4 is 128→64. 24 x 128 x 9 x 16b = 442 Kbit of kernels, and
-as registers that is 4x the device's entire flip-flop budget.
+**The weight memories must stay BRAM.** An earlier version declared them as arrays read
+combinationally, expecting LUTRAM; Vivado inferred flip-flops and the same design measured
+**138,248 LUT (260%) and 457,663 registers (430%)** — 24 x 128 x 9 x 16b is 442 Kbit of kernels.
+Moving them to BRAM cut LUTs 8x and registers 30x. If you restructure `conv_layer.wmem`, re-measure;
+`LUT as Memory = 0` alongside a huge register count is the signature of this going wrong again.
 
-**The fix is to move `wmem` into BRAM** (~13 BRAM36, easily affordable against 140). BRAM reads are
-registered, so this adds a pipeline stage on the weight path which must be aligned against the
-window path. That is precisely the change that has broken composition twice in this repo while every
-unit test still passed — **re-run `tb_conv_layer`, `tb_conv_chain` and `tb_conv_stage_axis` after
-doing it**, and prefer carrying the alignment through `conv_mac_3x3`'s existing `s_tag` mechanism
-rather than adding a shadow counter.
-
-Timing is not the problem here: 100 MHz is met at +0.521 ns even at MAX_CH=128.
+**The registered BRAM read costs no latency**, because it is issued from `line_buffer_mc`'s
+*stage-A* index (`m_rd_ch`, enabled by `m_rd_en`), which runs exactly one cycle ahead of the window.
+The BRAM output therefore lands in the same cycle as the window it belongs to, with no delay stage
+and no alignment hazard. **Do not "simplify" this to read on `m_ch`** — that is a cycle late, and
+every pixel would be convolved with the previous channel's kernel.
 
 ### Assumed dataflow (decided 2026-08-23, revisit if wrong)
 

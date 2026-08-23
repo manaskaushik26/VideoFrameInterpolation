@@ -60,7 +60,10 @@ module line_buffer_mc #(
     parameter int DATA_W   = 16,
     parameter int IMG_W    = 112,
     parameter int IMG_H    = 112,
-    parameter int MAX_CH   = 8
+    parameter int MAX_CH   = 8,
+    // Published channel-index width; must match the internal CHW. Declared here
+    // only because port widths cannot use a localparam from the body.
+    localparam int CHW_PUB = $clog2(MAX_CH > 1 ? MAX_CH : 2)
 )(
     input  logic                    clk,
     input  logic                    rst_n,
@@ -75,12 +78,27 @@ module line_buffer_mc #(
     // Index of the channel this window belongs to. Exposed so a layer can select
     // the matching kernel without keeping a second copy of this counter, which
     // would be free to drift out of step with the window stream.
-    output logic [$clog2(MAX_CH > 1 ? MAX_CH : 2)-1:0] m_ch,
+    output logic [CHW_PUB-1:0]      m_ch,
     output logic                    m_first,      // channel 0 of this pixel
     output logic                    m_last_ch,    // channel C-1 of this pixel
     output logic                    m_last_frame, // final channel of final pixel
     output logic                    m_valid,
-    input  logic                    m_ready
+    input  logic                    m_ready,
+
+    // Early read port for a consumer whose per-channel lookup lives in BRAM.
+    //
+    // m_rd_ch is the stage-A channel index -- the one that will appear on m_ch
+    // next cycle -- and m_rd_en is asserted exactly when stage B loads. A BRAM
+    // addressed with these, enabled by m_rd_en, produces its registered output
+    // in the same cycle as the window it belongs to, so a per-channel memory
+    // costs no extra latency and needs no alignment stage.
+    //
+    // That matters: adding a delay stage on one of two converging paths is the
+    // change that has broken composition twice in this design while every unit
+    // test still passed. This avoids needing one at all. When m_rd_en is low the
+    // BRAM holds its output, which is correct, because stage B is also holding.
+    output logic [CHW_PUB-1:0]      m_rd_ch,
+    output logic                    m_rd_en
 );
 
     localparam int CW     = $clog2(IMG_W + 1);
@@ -138,6 +156,8 @@ module line_buffer_mc #(
     assign m_valid      = b_out;
     assign s_ready      = in_image && b_free;
     assign m_ch         = chq;
+    assign m_rd_ch      = ch;
+    assign m_rd_en      = adv_a;
     assign m_first      = (chq == '0);
     assign m_last_ch    = (chq == ch_end);
     assign m_last_frame = b_out && (irq == R_END) && (icq == C_END) && (chq == ch_end);
