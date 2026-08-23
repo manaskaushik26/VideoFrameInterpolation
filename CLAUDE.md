@@ -174,10 +174,28 @@ These are plain source directories, deliberately **not** a Vivado project — th
 verified standalone, then added to a project once it works. That inversion is the point: the old
 design's defining failure was that the Vivado flow reported success on logic that computed nothing.
 
-Built so far: `rtl/conv/line_buffer_3x3.sv`, a `same`-padded 3×3 window generator with full
-valid/ready handshaking. Verified by `sim/tb_line_buffer_3x3.sv`, which recomputes every expected
-window from an independent reference array and compares tap by tap, across three backpressure
-regimes (no stalls, input stalls, both sides stalling) and geometries from 1×1 up to 224×224.
+Built so far:
+
+- **`line_buffer_3x3.sv`** — `same`-padded 3×3 window generator, full valid/ready handshaking.
+  Verified tap-by-tap against an independently computed reference array, across three backpressure
+  regimes and geometries from 1×1 to 224×224 (1.35M taps at full size).
+- **`conv_mac_3x3.sv`** — nine Q1.15 multiplies (one DSP48E1 each) accumulated across input
+  channels under caller-driven `first`/`last`, then rounded and saturated back to Q1.15. Verified
+  against a 64-bit reference where wrapping is impossible.
+
+Two conventions these establish, both of which the old design violated:
+
+1. **Saturation is evaluated at accumulator width, before any narrowing.** `synapse.v` compared the
+   sum against `MAX_ACC` at the accumulator's own width, so it wrapped before the comparison could
+   ever be true. Do not assume a clamp works because it is written down — `tb_conv_mac_3x3` counts
+   how often each arm actually fires and fails if any never does.
+2. **Everything crossing a module boundary is Q1.15.** The old `syn_current` was a raw integer while
+   the LIF threshold was Q1.15, so the two were never comparable.
+
+`conv_mac_3x3.OUT_SHIFT` parameterises requantisation rather than hardcoding `>>> 15`. At the
+neutral shift roughly 65% of random pixels saturate — a 9-tap sum over 128 channels of full-scale
+Q1.15 operands simply does not fit int16 — so **each layer needs its own shift, derived from the
+trained model.** Treat a hardcoded shift as a bug.
 
 **Trained weights are not needed to build or verify this.** Whether the hardware computes a
 convolution correctly is an arithmetic property; random stimulus tests it perfectly well. RTL work
