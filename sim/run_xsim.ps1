@@ -67,8 +67,16 @@ try {
     # OneDrive, whose sync client holds file handles. xelab then exits non-zero
     # despite having succeeded. Judge it on whether the snapshot actually
     # exists, and only report failure if it does not.
+    # Remove any previous snapshot FIRST. Judging success by "the snapshot
+    # exists" is only safe if a stale one cannot survive a failed elaboration --
+    # otherwise a broken design silently re-runs the last good build and reports
+    # PASS. That happened here: a port rename left vfi_top referencing pins that
+    # no longer existed, xelab failed, and the previous snapshot ran instead.
+    $snapDir = Join-Path "xsim.dir" $snap
+    if (Test-Path $snapDir) { Remove-Item -Recurse -Force $snapDir -ErrorAction SilentlyContinue }
+
     $log = xelab -debug typical $Tb -s $snap
-    $built = (Test-Path (Join-Path "xsim.dir" $snap)) -or
+    $built = (Test-Path $snapDir) -or
              ($log | Select-String -Quiet 'Built simulation snapshot')
     if (-not $built) {
         Write-Output ($log | Select-String -Pattern 'ERROR' | Select-Object -First 15)
