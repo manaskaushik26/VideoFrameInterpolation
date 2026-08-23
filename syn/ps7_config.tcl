@@ -19,10 +19,24 @@
 # design is self-describing and correct if it is ever built for a standalone
 # flow that does run ps7_init.
 
+# PL clock is 75 MHz, not 100. At 100 MHz the design misses setup by 2.793 ns
+# post-route, and the failing path is 82% routing with only 4 logic levels:
+#
+#   u_lb/chq_reg -> g_mac[16]/prod_q_reg   8.672ns = 1.551 logic + 7.121 route
+#
+# That is physical, not logical -- the 144-bit window is broadcast to 24 MACs
+# and 216 DSPs span the die, so more pipeline stages inside the MAC cannot help.
+# Fixing it properly means pipelining the broadcast itself (two register stages
+# between line_buffer_mc and the MAC array, splitting the route). Worth doing
+# when frame rate actually matters; 75 MHz costs ~25% throughput (conv3 43 -> 57
+# ms) and is not the binding constraint while there is no trained model.
+#
+# Post-synthesis slack said +1.126 ns for the same design. Estimated routing is
+# optimistic; only post-route WNS counts.
 proc vfi_configure_ps7 {cell} {
     set_property -dict [list \
         CONFIG.PCW_EN_CLK0_PORT             {1} \
-        CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {100} \
+        CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {75} \
         CONFIG.PCW_USE_M_AXI_GP0            {1} \
         CONFIG.PCW_USE_S_AXI_HP0            {1} \
         CONFIG.PCW_S_AXI_HP0_DATA_WIDTH     {64} \

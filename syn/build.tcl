@@ -51,12 +51,19 @@ if {[llength $rtl] == 0} { error "no RTL found under $repo/rtl" }
 add_files -norecurse $rtl
 set_property file_type SystemVerilog [get_files *.sv]
 
-# Promote the two message classes that let this project build nothing. Width
-# mismatches and port-count mismatches were only warnings in the superseded
-# design, and between them they produced a netlist that computed a constant zero
-# and still reported success.
-set_msg_config -id {Synth 8-689}  -new_severity ERROR
-set_msg_config -id {Synth 8-7023} -new_severity ERROR
+# Width mismatches (Synth 8-689) and port-count mismatches (8-7023) are the two
+# warning classes that between them let the superseded design synthesise a
+# netlist computing a constant zero and still report success. They must fail the
+# build.
+#
+# But they cannot simply be promoted with set_msg_config: that is project-wide,
+# and Xilinx's own generated IP trips 8-7023 routinely and legitimately -- the
+# processing_system7 wrapper declares 685 connections and gives 672, and
+# smartconnect does the same. Promoting it globally fails Xilinx IP, not our
+# RTL. (Our RTL synthesised clean in that run; only the IP runs failed.)
+#
+# So the check is applied after synthesis, scoped to files under rtl/. See
+# check_our_warnings below.
 
 # ---------------------------------------------------------------- block design
 create_bd_design $bd_name
@@ -69,12 +76,38 @@ vfi_configure_ps7 $ps
 
 set rst [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_100]
 
-# The IP under test, as a module reference. Referenced through vfi_top_v, a
-# plain Verilog wrapper: Vivado rejects a SystemVerilog file as the top of a
-# module reference ("[filemgmt 56-195] ... not allowed as the top file"). Ports
-# are named so the BD infers aclk/aresetn and the AXI interfaces; see vfi_top's
-# header.
-set dut [create_bd_cell -type module -reference vfi_top_v vfi]
+# The IP under test.
+#
+# Preferred: the packaged IP from ip_repo/, built by syn/package_ip.tcl. It
+# declares its AXI interfaces explicitly in IP-XACT rather than relying on
+# Vivado inferring them from port names, and it takes the SystemVerilog top
+# directly.
+#
+# Fallback: a module reference through vfi_top_v.v, a plain Verilog wrapper that
+# exists because module references reject SystemVerilog tops
+# ("[filemgmt 56-195] ... not allowed as the top file"). Kept so the build works
+# from a clean checkout without running package_ip.tcl first.
+set ip_repo [file join $repo ip_repo]
+set use_packaged 0
+if {[file isdirectory $ip_repo]} {
+    # [list $ip_repo], not $ip_repo. ip_repo_paths is a Tcl list property, and
+    # this repository's path contains a space ("VFI FPGA"), so passing the bare
+    # string splits it into two nonexistent entries:
+    #   {.../VFI} {.../VFI FPGA/FPGA/ip_repo}
+    # The catalog then finds nothing and reports no error at all.
+    set_property ip_repo_paths [list $ip_repo] [current_project]
+    update_ip_catalog -rebuild
+    # Match on VLNV, not NAME: an ipdef's NAME is not the module name.
+    if {[llength [get_ipdefs -filter {VLNV =~ vfi:user:vfi_top:*}]] > 0} { set use_packaged 1 }
+}
+
+if {$use_packaged} {
+    puts "=== using packaged IP from $ip_repo ==="
+    set dut [create_bd_cell -type ip -vlnv vfi:user:vfi_top:1.0 vfi]
+} else {
+    puts "=== ip_repo not found; falling back to module reference ==="
+    set dut [create_bd_cell -type module -reference vfi_top_v vfi]
+}
 set_property -dict [list \
     CONFIG.N_OUT  $n_out \
     CONFIG.MAX_CH $max_ch \
@@ -177,10 +210,35 @@ update_compile_order -fileset sources_1
 # through silently.
 
 # ---------------------------------------------------------------- build
+# Fail on width/port-count warnings, but only for our own sources. Xilinx IP
+# legitimately triggers 8-7023, so a project-wide promotion is not usable.
+proc check_our_warnings {logfile rtl_dir} {
+    if {![file exists $logfile]} { return 0 }
+    set fh [open $logfile r]
+    set txt [read $fh]
+    close $fh
+    set bad 0
+    foreach line [split $txt "
+"] {
+        if {[regexp {Synth 8-(689|7023)} $line] && [string match -nocase "*${rtl_dir}*" $line]} {
+            puts "OURS-STRICT $line"
+            incr bad
+        }
+    }
+    return $bad
+}
+
 launch_runs synth_1 -jobs 4
 wait_on_run synth_1
 if {[get_property PROGRESS [get_runs synth_1]] != "100%"} {
     puts "SYNTHESIS FAILED"
+    exit 1
+}
+
+set synth_log [file join $out_dir ${proj}.runs synth_1 runme.log]
+set bad [check_our_warnings $synth_log [file join $repo rtl]]
+if {$bad > 0} {
+    puts "SYNTHESIS FAILED: $bad width/port-count warning(s) in our RTL"
     exit 1
 }
 
@@ -201,6 +259,24 @@ set whs [get_property STATS.WHS [get_runs impl_1]]
 puts "SUMMARY WNS $wns"
 puts "SUMMARY WHS $whs"
 
+# A bitstream is written even when timing fails, so the artifact existing proves
+# nothing. Post-synthesis slack is an estimate and was optimistic here by nearly
+# 4 ns; only post-route WNS/WHS count. Report the failure loudly rather than
+# printing BUILD OK over it -- a build that says OK while the design cannot meet
+# its clock is the same false success that produced the constant-zero bitstream.
+set timing_ok 1
+if {$wns < 0} {
+    puts "SUMMARY TIMING FAILED setup WNS ${wns}ns"
+    set timing_ok 0
+}
+if {$whs < 0} {
+    puts "SUMMARY TIMING FAILED hold WHS ${whs}ns"
+    set timing_ok 0
+}
+
+puts "=== WORST SETUP PATH ==="
+report_timing -delay_type max -max_paths 1 -nworst 1 -path_type full
+
 set bit [file join $out_dir ${proj}.runs impl_1 ${bd_name}_wrapper.bit]
 if {[file exists $bit]} {
     file copy -force $bit [file join $out_dir vfi.bit]
@@ -211,5 +287,10 @@ if {[file exists $bit]} {
 
 write_hw_platform -fixed -include_bit -force [file join $out_dir vfi.xsa]
 puts "SUMMARY XSA [file join $out_dir vfi.xsa]"
+
+if {!$timing_ok} {
+    puts "=== BUILD FAILED: timing not met ==="
+    exit 1
+}
 puts "=== BUILD OK ==="
 exit 0
