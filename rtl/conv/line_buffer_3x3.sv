@@ -60,6 +60,19 @@ module line_buffer_3x3 #(
     localparam int CW = $clog2(IMG_W + 1);
     localparam int RW = $clog2(IMG_H + 1);
 
+    // Counter-width copies of the bounds, so the comparisons below are not
+    // width-expansions -- this project cannot afford to habituate itself to
+    // ignoring width warnings. Safe because CW/RW always hold these values:
+    // 2**CW >= IMG_W+1 > IMG_W.
+    //
+    // Note this trick works ONLY for IMG_W/IMG_H. Do not apply it to the small
+    // literals 1 and 2 used below: at IMG_W=1 the counter is a single bit, and
+    // CW'(2) truncates to 0, turning `ic >= 2` into a tautology. Those
+    // comparisons widen the counter with int'() instead. The 1x1 case in the
+    // testbench exists to catch exactly this.
+    localparam logic [CW-1:0] C_END = CW'(IMG_W);
+    localparam logic [RW-1:0] R_END = RW'(IMG_H);
+
     // Tick counters. Range 0..IMG_W and 0..IMG_H inclusive -- the extra tick per
     // axis is the padding flush described above.
     logic [CW-1:0] ic;
@@ -76,10 +89,10 @@ module line_buffer_3x3 #(
     // A real pixel is needed only inside the image proper; the flush ticks
     // synthesise zeros instead.
     logic in_image;
-    assign in_image = (ir < IMG_H) && (ic < IMG_W);
+    assign in_image = (ir < R_END) && (ic < C_END);
 
     logic valid_comb;
-    assign valid_comb = (ir >= 1) && (ic >= 1);
+    assign valid_comb = (int'(ir) >= 1) && (int'(ic) >= 1);
 
     // Advance when the input we need is present and the output we produce is
     // accepted. Both conditions are vacuous when they do not apply.
@@ -92,16 +105,16 @@ module line_buffer_3x3 #(
     // the last real column during the flush tick. Clamp the read index as well:
     // ic reaches IMG_W, which is off the end of the line stores.
     logic [CW-1:0] rd_ic;
-    assign rd_ic = (ic < IMG_W) ? ic : '0;
+    assign rd_ic = (ic < C_END) ? ic : '0;
 
     logic col_in_image;
-    assign col_in_image = (ic < IMG_W);
+    assign col_in_image = (ic < C_END);
 
     logic [DATA_W-1:0] tap [3];
     always_comb begin
-        tap[0] = (ir >= 2     && col_in_image) ? bufA[rd_ic] : '0;   // row ir-2
-        tap[1] = (ir >= 1     && col_in_image) ? bufB[rd_ic] : '0;   // row ir-1
-        tap[2] = (ir <  IMG_H && col_in_image) ? s_data      : '0;   // row ir, live
+        tap[0] = (int'(ir) >= 2 && col_in_image) ? bufA[rd_ic] : '0;   // row ir-2
+        tap[1] = (int'(ir) >= 1 && col_in_image) ? bufB[rd_ic] : '0;   // row ir-1
+        tap[2] = (ir <  R_END  && col_in_image) ? s_data      : '0;   // row ir, live
     end
 
     // Window assembly. Column masking handles the left edge, so the delay
@@ -109,8 +122,8 @@ module line_buffer_3x3 #(
     always_comb begin
         for (int r = 0; r < 3; r++) begin
             m_window[(r*3 + 2)*DATA_W +: DATA_W] = tap[r];                       // col ic
-            m_window[(r*3 + 1)*DATA_W +: DATA_W] = (ic >= 1) ? d1[r] : '0;       // col ic-1
-            m_window[(r*3 + 0)*DATA_W +: DATA_W] = (ic >= 2) ? d2[r] : '0;       // col ic-2
+            m_window[(r*3 + 1)*DATA_W +: DATA_W] = (int'(ic) >= 1) ? d1[r] : '0;       // col ic-1
+            m_window[(r*3 + 0)*DATA_W +: DATA_W] = (int'(ic) >= 2) ? d2[r] : '0;       // col ic-2
         end
     end
 
@@ -118,7 +131,7 @@ module line_buffer_3x3 #(
     // only real once that pixel has actually arrived. Gating m_valid on s_valid
     // is what makes the block correct under input backpressure.
     assign m_valid = valid_comb && (!in_image || s_valid);
-    assign m_last  = m_valid && (ir == IMG_H) && (ic == IMG_W);
+    assign m_last  = m_valid && (ir == R_END) && (ic == C_END);
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
@@ -136,14 +149,14 @@ module line_buffer_3x3 #(
 
             // Shift the row window down one: what was ir-1 becomes ir-2, and the
             // live pixel becomes ir-1. Only meaningful while real pixels arrive.
-            if (ir < IMG_H && ic < IMG_W) begin
+            if (ir < R_END && ic < C_END) begin
                 bufA[ic] <= bufB[ic];
                 bufB[ic] <= s_data;
             end
 
-            if (ic == IMG_W) begin
+            if (ic == C_END) begin
                 ic <= '0;
-                ir <= (ir == IMG_H) ? '0 : (ir + 1'b1);
+                ir <= (ir == R_END) ? '0 : (ir + 1'b1);
             end else begin
                 ic <= ic + 1'b1;
             end

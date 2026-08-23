@@ -99,19 +99,36 @@ arguments containing `=`, turning `-d W=224` into a define plus a phantom filena
 `Set-Content -Encoding utf8` writes a BOM that corrupts the first line of an `-f` options file,
 silently dropping `-sv` so every SystemVerilog source fails to parse. The script handles both.
 
-**oss-cad-suite is also installed** at `C:\Users\manas\Downloads\oss-cad-suite\bin`. Its binaries
-will not run from the Bash tool — they exit 127 unless the suite's environment is loaded first, and
-`which iverilog` resolving is not evidence that it works. From PowerShell:
+**Lint with `sim\run_lint.ps1`** before committing any RTL. It exits non-zero on warnings, so it is
+safe to gate on:
+
+```powershell
+.\sim\run_lint.ps1                        # every module under rtl\
+.\sim\run_lint.ps1 -Modules line_buffer_3x3
+```
+
+Do not invoke `verilator` directly. Two traps, both of which fail *silently* and one of which
+already produced a false "lint clean" claim in this repo's history:
+
+- `oss-cad-suite\bin\verilator` is an extensionless **Perl script**, not an executable. From
+  PowerShell it does not lint anything — Windows raises a "how do you want to open this file?"
+  dialog and the shell reports **exit 0**, which is indistinguishable from a clean run. Use
+  `verilator_bin.exe`.
+- `environment.ps1` sets `VERILATOR_ROOT` to a Unix path (`/yosyshq/share/verilator`) that does not
+  resolve on Windows, so `verilator_bin.exe` cannot find its waiver files and errors out. It must be
+  overridden to `...\oss-cad-suite\share\verilator`.
+
+Linting matters here specifically: implicit width truncation is what silently produced the
+constant-zero design, and Verilator errors on it where Vivado only warned.
+
+**oss-cad-suite also provides Icarus Verilog** (`iverilog`, `vvp`) as a fast second opinion —
+seconds, versus ~1 min for an `xsim` elaborate. Its binaries will not run from the Bash tool at all
+(exit 127); `which iverilog` resolving is not evidence that it works. From PowerShell:
 
 ```powershell
 . "C:\Users\manas\Downloads\oss-cad-suite\environment.ps1"
-iverilog -g2012 -o build\lb.vvp sim\tb_x.sv rtl\x.sv;  vvp build\lb.vvp
-verilator --lint-only -Wall -Wno-DECLFILENAME --top-module x rtl\x.sv
+iverilog -g2012 -o build\x.vvp sim\tb_x.sv rtl\x.sv;  vvp build\x.vvp
 ```
-
-Icarus is useful as a fast second opinion (seconds, versus ~1 min for an `xsim` elaborate), and
-`verilator --lint-only -Wall` is worth running on anything new: implicit width truncation is exactly
-what silently produced the constant-zero design, and Verilator errors where Vivado only warned.
 
 Python 3.14 is at `C:\Python314`, but **`numpy`, `torch`, and `cv2` are all absent** — the reference
 model and training work need those installed first. No CUDA.
