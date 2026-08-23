@@ -254,6 +254,37 @@ diagnostic for a wrong `OUT_SHIFT`: too small clips and destroys the activation,
 away precision. Verified to work — the chain testbench reports clean at shift 20 and flags both
 layers at shift 10. Use it to tune the per-layer shifts once the trained model exists.
 
+### AXI-Stream layer (`rtl/axis/`)
+
+- **`axis_skid.sv`** — skid buffer. Registers the data path, TVALID, and the upstream TREADY, so the
+  ready chain does not run combinationally through the design.
+- **`conv_stage_axis.sv`** — `S_AXIS → skid → conv_stage → skid → M_AXIS`. This is the unit the
+  AXI-DMA talks to, replacing `top_axis.sv`.
+
+TDATA is one Q1.15 value per beat in `(row, col, channel)` channel-minor order, identical on both
+interfaces. **Exactly one TLAST per frame**, on the final beat — S2MM needs it to complete a
+transfer, and its absence is the DMA hang in the old design. Input packet is
+`IMG_W*IMG_H*CH_IN` beats, output `IMG_W*IMG_H*N_OUT`.
+
+`s_axis_tlast` is deliberately accepted and ignored: frame length is a parameter and the line
+buffer's counters define the frame, so a short or long DMA descriptor cannot silently desynchronise
+the pipeline.
+
+**`sim/axis_checker.sv` monitors any stream for protocol violations** — TVALID withdrawn before
+TREADY, payload changing while stalled, wrong packet length, X on a qualified beat. Each rule maps to
+a defect that shipped in the old design. **Instantiate it on both sides of any new AXI interface.**
+It earned itself immediately by catching non-compliant stimulus in its own testbench's driver.
+
+None of these bugs are observable at full rate — which is exactly why the old design passed its
+testbenches and hung on hardware. **Always run AXI tests with stalls on both sides.**
+
+### Assumed dataflow (decided 2026-08-23, revisit if wrong)
+
+Intermediates round-trip through DDR via AXI-DMA, **one DMA transaction per layer pass**, with the PS
+orchestrating. Chosen because a 112x112x64 map is 12.8 Mbit and cannot stay on chip, and because the
+existing block design (PS7 → smartconnect → AXI-DMA) already supports it. This was the owner's call
+to delegate; it is an assumption, not a measured result.
+
 **A layer with more than N_OUT output channels runs as ceil(C_out/N_OUT) passes over the input.**
 Where the input lives between passes — and between layers, since a 112x112x64 map is 12.8 Mbit and
 cannot stay on chip — is the sequencer's problem and is **still an open design question**. It needs
