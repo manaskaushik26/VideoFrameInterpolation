@@ -130,20 +130,47 @@ module conv_mac_3x3 #(
 
     // Round-half-up, then saturate. Both happen at ACC_W, before narrowing.
     // OUT_SHIFT == 0 means no scaling, and then there is no rounding bit to add.
+    // cfg_shift is registered locally rather than used directly. It comes from a
+    // single control register feeding every MAC in the array, and driving the
+    // barrel shifter straight from there put the whole distribution route in
+    // series with 17 CARRY4 stages: measured -0.385 ns across 408 endpoints at
+    // N_OUT=24. A private copy per MAC makes the path local.
+    //
+    // The extra cycle of latency on a *configuration* change is harmless --
+    // cfg_shift is required to be stable across a frame -- but it does mean a
+    // change takes effect one cycle after it is written, so do not change it
+    // while a frame is in flight.
+    // EQUIVALENT_REGISTER_REMOVAL must be off. Every MAC's copy has identical
+    // inputs, so without this Vivado merges all N_OUT of them back into one and
+    // the long distribution route reappears -- measured: the "local" register
+    // ended up sourced from g_mac[18] and feeding g_mac[10], with the slack
+    // unchanged at -0.385 ns. Keeping the copies distinct is the entire point.
+    (* dont_touch = "yes" *)
+    (* EQUIVALENT_REGISTER_REMOVAL = "no" *)
+    logic [SHIFT_W-1:0] shift_q;
+    always_ff @(posedge clk) begin
+        if (!rst_n) shift_q <= SHIFT_W'(WEIGHT_W - 1);
+        else        shift_q <= cfg_shift;
+    end
+
     // Runtime shift, so this is a barrel shifter rather than a wiring change.
     // The rounding bit is 1 << (shift-1), and a shift of zero means no scaling
     // and therefore no rounding bit.
     logic signed [ACC_W-1:0] rounded;
     logic signed [ACC_W-1:0] round_bias;
     always_comb begin
-        if (cfg_shift == '0) begin
-            round_bias = '0;
-            rounded    = acc_final;
-        end else begin
-            round_bias = ACC_W'(1) <<< (cfg_shift - 1);
-            rounded    = (acc_final + round_bias) >>> cfg_shift;
-        end
+        if (shift_q == '0) round_bias = '0;
+        else               round_bias = ACC_W'(1) <<< (shift_q - 1);
     end
+
+    // Stage R holds acc_final + rounding bias. Splitting the add away from the
+    // shift and the saturation compares is required, not cosmetic: with all
+    // three in one stage the path measured 24 logic levels and 17 CARRY4, at
+    // -0.320 ns for N_OUT=24 even with shift_q held local to each MAC.
+    logic signed [ACC_W-1:0] rsum;
+    logic                    r_vld, r_tag;
+
+    assign rounded = rsum >>> shift_q;
 
     logic sat_hi, sat_lo;
     assign sat_hi = (rounded > ACC_W'(OUT_MAX));
@@ -156,17 +183,19 @@ module conv_mac_3x3 #(
         else             clamped = DATA_W'(rounded);
     end
 
-    // Three-stage handshake: multiply -> accumulate -> requantise. Each stage
+    // Four-stage handshake: multiply -> accumulate -> round -> shift/saturate. Each stage
     // drains independently, so a stalled consumer does not stall the stages
     // behind it any earlier than it must.
-    logic m_free, p_to_m, a_can_take, m_to_a, accept;
+    logic m_free, r_to_m, r_free, p_to_r, a_can_take, m_to_a, accept;
 
     assign m_free     = !m_valid || m_ready;
-    assign p_to_m     = p_vld && m_free;
+    assign r_to_m     = r_vld && m_free;
+    assign r_free     = !r_vld || r_to_m;
+    assign p_to_r     = p_vld && r_free;
 
     // The accumulate stage absorbs every beat; only a beat that completes a
     // pixel needs the pending slot free.
-    assign a_can_take = !last_q || !p_vld || p_to_m;
+    assign a_can_take = !last_q || !p_vld || p_to_r;
     assign m_to_a     = mq_vld && a_can_take;
 
     assign s_ready    = !mq_vld || m_to_a;
@@ -183,6 +212,9 @@ module conv_mac_3x3 #(
             acc_final <= '0;
             p_vld     <= 1'b0;
             p_tag     <= 1'b0;
+            rsum      <= '0;
+            r_vld     <= 1'b0;
+            r_tag     <= 1'b0;
             m_data    <= '0;
             m_sat     <= 1'b0;
             m_tag     <= 1'b0;
@@ -190,11 +222,20 @@ module conv_mac_3x3 #(
         end else begin
             // -- requantise stage
             if (m_valid && m_ready) m_valid <= 1'b0;
-            if (p_to_m) begin
+            if (r_to_m) begin
                 m_data  <= clamped;
                 m_sat   <= sat_hi | sat_lo;
-                m_tag   <= p_tag;
+                m_tag   <= r_tag;
                 m_valid <= 1'b1;
+            end
+
+            // -- rounding-add stage
+            if (p_to_r) begin
+                rsum  <= acc_final + round_bias;
+                r_tag <= p_tag;
+                r_vld <= 1'b1;
+            end else if (r_to_m) begin
+                r_vld <= 1'b0;
             end
 
             // -- accumulate stage. A completed pixel replacing one that is
@@ -206,10 +247,10 @@ module conv_mac_3x3 #(
                     acc_final <= acc_next;
                     p_tag     <= tag_q;
                     p_vld     <= 1'b1;
-                end else if (p_to_m) begin
+                end else if (p_to_r) begin
                     p_vld     <= 1'b0;
                 end
-            end else if (p_to_m) begin
+            end else if (p_to_r) begin
                 p_vld <= 1'b0;
             end
 

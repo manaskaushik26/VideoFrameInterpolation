@@ -294,7 +294,79 @@ exactly the flattened `(out, in, kh, kw)` layout of `conv*_weight_q15.bin` (§4.
 the file as-is. **Never add reordering here**; it would silently transpose every kernel.
 `N_OUT*CH_IN*9` beats per layer; `weights_loaded` rises when a full set has landed.
 
-### The full layer fits, measured at the worst-case shape
+### The complete IP: `rtl/axis/vfi_top.sv`
+
+This is what the block design instantiates, replacing `top_axis.sv` / `vfi_top_0`.
+
+```
+S_AXIL   control and status (PS)
+S_WT     kernels for the current layer   (DMA)
+S_AXIS   input feature map               (DMA MM2S)
+M_AXIS   output feature map              (DMA S2MM)
+```
+
+The PS runs the network by repeating, per layer:
+
+```
+write CFG (channels, shift) -> DMA kernels -> DMA feature map in
+                            -> DMA feature map out -> read STATUS
+```
+
+Layer output and input share the same `(row, col, channel)` channel-minor layout, so a result goes
+straight back to DDR and returns as the next layer's input with no reformatting.
+
+**AXI-Lite register map** (`rtl/axis/axil_regs.sv`) — the old IP had **no AXI-Lite at all**, so every
+`ctrl.write()` in the host notebook was impossible as written (§7):
+
+| Addr | | |
+|---|---|---|
+| 0x00 | ID | R — `0x56464931` ("VFI1"). **Read this first from the host.** The old host pointed at the wrong bitstream *and* the wrong instance name; a magic number turns both into an obvious failure instead of silently wrong output. |
+| 0x04 | CFG | RW — `[7:0]` channels, `[13:8]` shift. Write before the frame that uses them; hold stable for its duration. |
+| 0x08 | CTRL | W — `[0]` sat_clear, `[1]` soft_reset (both self-clearing pulses) |
+| 0x0C | STATUS | R — `[0]` weights_loaded, `[1]` sat_sticky |
+| 0x10 | FRAMES | R — completed frames; distinguishes "running" from "hung" |
+
+Unmapped addresses respond rather than stall — an AXI-Lite slave that never answers locks the PS bus,
+and a wrong address in host code is far easier to debug than a frozen board.
+
+`soft_reset` resets the datapath only, deliberately: resetting `axil_regs` from its own write would
+drop the AXI-Lite response mid-transaction and hang the PS.
+
+### Measured at the worst-case shape
+
+`vfi_top` at 112x112, **MAX_CH=128, N_OUT=24** — the conv4 shape — synthesised OOC on
+`xc7z020clg400-1`:
+
+| | Used | Available | |
+|---|---|---|---|
+| DSP48E1 | **216** | 220 | 98% — N_OUT=24 is the hard ceiling |
+| LUT | 17,239 | 53,200 | 32% |
+| Registers | 17,065 | 106,400 | 16% |
+| Block RAM | 64 | 140 | 46% |
+| **Timing @ 100 MHz** | **+1.126 ns** | | **0 failing endpoints** |
+
+`conv_mac_3x3` needs **all four** of its pipeline stages (multiply → accumulate → round →
+shift/saturate). Each split was forced by measurement, not taste:
+
+| Stages | Slack | What was in the critical path |
+|---|---|---|
+| 1 | -10.625 ns | accumulate + rounding add + saturate in series |
+| 2 | -5.561 ns | BRAM → DSP → 9-way adder tree → accumulate |
+| 3 | -0.320 ns | 48-bit add + barrel shift + compares, 24 levels / 17 CARRY4 |
+| **4** | **+1.126 ns** | meets |
+
+Two non-obvious requirements, both of which cost real slack when missed:
+
+- **Products must be registered** (`prod_q`) so synthesis uses the DSP48E1's own output register.
+- **`shift_q` carries `dont_touch` and `EQUIVALENT_REGISTER_REMOVAL = "no"`.** Every MAC's copy has
+  identical inputs, so without those Vivado merges all 24 back into one and the long distribution
+  route reappears — the "local" register ended up sourced from `g_mac[18]` feeding `g_mac[10]`, with
+  the slack unchanged.
+
+**If you restructure the MAC, re-measure.** `LUT as Memory = 0` with a large register count means the
+weight memories stopped inferring BRAM.
+
+### Superseded note: the weight memories must stay BRAM
 
 `conv_layer` at 112x112, **MAX_CH=128, N_OUT=24** — the conv4 shape, which is the hardest one —
 synthesised OOC on `xc7z020clg400-1`:
