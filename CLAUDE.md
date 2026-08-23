@@ -265,6 +265,29 @@ Virtex-7 `xc7vx485tffg1157-1` instead of the Zynq; and all four width mismatches
 (upper 8 bits undriven). The accumulator's saturation logic is genuinely dead code: `syn_current +
 mult_ext` wraps at `ACC_WIDTH` before the comparison against `MAX_ACC` can ever be true.
 
+## Settled: 112x112
+
+The §11 Step 2 scope-down is **decided — target 112×112**, owner's call, 2026-08-23. This sets the
+DSP array size, so it is a precondition for the layer sequencer, not a later optimisation. New RTL
+defaults to `IMG_W = IMG_H = 112`. At 224×224 the network is 9.36 GMAC/frame against 220 DSPs
+(~0.3–2 fps); 112×112 is roughly 4× cheaper, and flow fields are smooth enough to upsample.
+
+Still open, and genuinely blocked on the trained model: the **per-layer `OUT_SHIFT` values**. Do not
+invent them.
+
+## Testing policy: blocks must be tested composed, not just alone
+
+Owner's standing instruction, and it is the right one — the superseded design's modules each had a
+passing unit testbench, and the integrated result computed a constant zero. Whenever a new block
+lands, add or extend an integration testbench that runs it against the blocks it connects to and
+checks the end-to-end result against a full software reference, not just the block's local
+contract. Handshake mismatches, window-ordering errors and `first`/`last` sequencing bugs are only
+visible there.
+
+Current integration coverage: `sim/tb_conv_layer_1ch.sv` drives a whole image through
+`line_buffer_3x3` → `conv_mac_3x3` and compares against a full 2D cross-correlation computed in the
+testbench.
+
 ## Direction of work
 
 Per §11 of the handoff doc, in order: (1) rebuild and train the model in PyTorch with **ReLU**, which

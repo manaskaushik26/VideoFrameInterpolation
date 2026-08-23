@@ -44,7 +44,17 @@ foreach ($m in $Modules) {
     $src = Get-ChildItem -Recurse -Path $RtlDir -Filter "$m.sv" | Select-Object -First 1
     if (-not $src) { Write-Output "$m : SOURCE NOT FOUND"; $failed += $m; continue }
 
-    $out = & $verilator --lint-only -Wall -Wno-DECLFILENAME --top-module $m $src.FullName 2>&1
+    # -y on every rtl subdirectory so hierarchical modules resolve their
+    # submodules by filename. Requires file stem == module name, which is the
+    # convention here.
+    # @() on both sides: Get-ChildItem returns a bare object rather than an array
+    # when it matches exactly one directory, and + then fails on it.
+    $inc = @()
+    foreach ($d in @(Get-ChildItem -Recurse -Directory -Path $RtlDir) + @(Get-Item $RtlDir)) {
+        $inc += @("-y", $d.FullName)
+    }
+
+    $out = & $verilator --lint-only -Wall -Wno-DECLFILENAME @inc --top-module $m $src.FullName 2>&1
     if ($LASTEXITCODE -eq 0) {
         "{0,-24} clean" -f $m
     } else {
