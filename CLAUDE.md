@@ -236,9 +236,28 @@ part-select width** (`x[i*W +: W]`), and synthesis then fails with "range width 
 integer" — override only parameters used in plain arithmetic. And PowerShell silently drops an
 empty-string argument, shifting every later `-tclargs` position.
 
+- **`act_unit.sv`** — activation, combinational, `MODE` 0 linear / 1 ReLU. **This is the only module
+  the CNN → SNN swap touches** (§10). Keep it separate and zero-latency; do not fold it into the MAC.
+  MODE 2 (LIF) will need clk/rst and a timestep enable, at which point it stops being combinational
+  and every integration testbench must be re-run.
+- **`axis_serializer.sv`** — N parallel lanes → one value per cycle.
+- **`conv_stage.sv`** — a complete layer: `conv_layer` → `act_unit` → `axis_serializer`.
+
+**Layers chain with no glue.** `conv_stage`'s input and output are the same format —
+`(row, col, channel)`, channel-minor — so one stage's output stream feeds the next stage's input
+directly. `sim/tb_conv_chain.sv` proves it against a full two-layer software forward pass, including
+backpressure propagating from stage 2 back through stage 1's serialiser into its MAC array and line
+buffer. **Preserve that format.** It is also the shape the DMA path carries to and from DDR.
+
+`conv_stage.sat_sticky` latches whether any output clipped, cleared by `sat_clear`. This is the
+diagnostic for a wrong `OUT_SHIFT`: too small clips and destroys the activation, too large throws
+away precision. Verified to work — the chain testbench reports clean at shift 20 and flags both
+layers at shift 10. Use it to tune the per-layer shifts once the trained model exists.
+
 **A layer with more than N_OUT output channels runs as ceil(C_out/N_OUT) passes over the input.**
 Where the input lives between passes — and between layers, since a 112x112x64 map is 12.8 Mbit and
-cannot stay on chip — is the sequencer's problem and is still open.
+cannot stay on chip — is the sequencer's problem and is **still an open design question**. It needs
+a decision on DDR round-tripping via DMA before the sequencer can be built.
 
 Two conventions these establish, both of which the old design violated:
 
