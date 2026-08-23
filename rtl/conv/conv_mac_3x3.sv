@@ -60,11 +60,18 @@ module conv_mac_3x3 #(
     input  logic [9*WEIGHT_W-1:0]       s_weights,
     input  logic                        s_first,     // first channel of this pixel
     input  logic                        s_last,      // last channel of this pixel
+    // Sideband bit sampled on the s_last beat and delivered with the output it
+    // produces. Callers use it for end-of-frame. It rides the pipeline so that
+    // changing this module's latency cannot silently desynchronise a flag a
+    // caller is tracking separately -- which is exactly what happened when the
+    // requantise stage was added.
+    input  logic                        s_tag,
     input  logic                        s_valid,
     output logic                        s_ready,
 
     output logic signed [DATA_W-1:0]    m_data,      // Q1.15
     output logic                        m_sat,       // result was clamped
+    output logic                        m_tag,
     output logic                        m_valid,
     input  logic                        m_ready
 );
@@ -84,24 +91,42 @@ module conv_mac_3x3 #(
         end
     end
 
+    // Multiply stage. Registering the products lets synthesis use the DSP48E1's
+    // own output register, which is what actually buys the clock rate: without
+    // it the path ran BRAM -> DSP -> 9-way adder tree -> accumulate in a single
+    // cycle, 19 logic levels, measured -5.561 ns against 10 ns. The control bits
+    // travel with the data so they stay aligned.
+    logic signed [PROD_W-1:0] prod_q [9];
+    logic                     mq_vld, first_q, last_q, tag_q;
+
     // Sign-extend into the accumulator domain before summing, so the adder tree
     // never truncates.
     logic signed [ACC_W-1:0] dot;
     always_comb begin
         dot = '0;
-        for (int i = 0; i < 9; i++) dot += ACC_W'(prod[i]);
+        for (int i = 0; i < 9; i++) dot += ACC_W'(prod_q[i]);
     end
 
     logic signed [ACC_W-1:0] acc;
     logic signed [ACC_W-1:0] acc_next;
-    assign acc_next = (s_first ? '0 : acc) + dot;
+    assign acc_next = (first_q ? '0 : acc) + dot;
+
+    // Completed accumulator value, waiting to be requantised. This register is
+    // what makes the design meet timing: with the accumulate, the rounding add
+    // and the saturation compares all in one cycle the critical path was
+    // acc_reg -> m_data_reg at 23 logic levels and 17 CARRY4, i.e. three long
+    // carry chains in series, which measured -3.655 ns slack against 10 ns.
+    // Splitting here puts one carry chain in each stage.
+    logic signed [ACC_W-1:0] acc_final;
+    logic                    p_vld;
+    logic                    p_tag;
 
     // Round-half-up, then saturate. Both happen at ACC_W, before narrowing.
     // OUT_SHIFT == 0 means no scaling, and then there is no rounding bit to add.
     logic signed [ACC_W-1:0] rounded;
     always_comb begin
-        if (OUT_SHIFT == 0) rounded = acc_next;
-        else                rounded = (acc_next + (ACC_W'(1) <<< (OUT_SHIFT-1))) >>> OUT_SHIFT;
+        if (OUT_SHIFT == 0) rounded = acc_final;
+        else                rounded = (acc_final + (ACC_W'(1) <<< (OUT_SHIFT-1))) >>> OUT_SHIFT;
     end
 
     logic sat_hi, sat_lo;
@@ -115,28 +140,72 @@ module conv_mac_3x3 #(
         else             clamped = DATA_W'(rounded);
     end
 
-    // Hold the pipe while a finished pixel is waiting to be taken, so the
-    // accumulator cannot be overwritten before its result is read.
-    logic accept;
-    assign s_ready = (!m_valid || m_ready);
-    assign accept  = s_valid && s_ready;
+    // Three-stage handshake: multiply -> accumulate -> requantise. Each stage
+    // drains independently, so a stalled consumer does not stall the stages
+    // behind it any earlier than it must.
+    logic m_free, p_to_m, a_can_take, m_to_a, accept;
+
+    assign m_free     = !m_valid || m_ready;
+    assign p_to_m     = p_vld && m_free;
+
+    // The accumulate stage absorbs every beat; only a beat that completes a
+    // pixel needs the pending slot free.
+    assign a_can_take = !last_q || !p_vld || p_to_m;
+    assign m_to_a     = mq_vld && a_can_take;
+
+    assign s_ready    = !mq_vld || m_to_a;
+    assign accept     = s_valid && s_ready;
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
-            acc     <= '0;
-            m_data  <= '0;
-            m_sat   <= 1'b0;
-            m_valid <= 1'b0;
+            for (int i = 0; i < 9; i++) prod_q[i] <= '0;
+            mq_vld    <= 1'b0;
+            first_q   <= 1'b0;
+            last_q    <= 1'b0;
+            tag_q     <= 1'b0;
+            acc       <= '0;
+            acc_final <= '0;
+            p_vld     <= 1'b0;
+            p_tag     <= 1'b0;
+            m_data    <= '0;
+            m_sat     <= 1'b0;
+            m_tag     <= 1'b0;
+            m_valid   <= 1'b0;
         end else begin
+            // -- requantise stage
             if (m_valid && m_ready) m_valid <= 1'b0;
+            if (p_to_m) begin
+                m_data  <= clamped;
+                m_sat   <= sat_hi | sat_lo;
+                m_tag   <= p_tag;
+                m_valid <= 1'b1;
+            end
 
-            if (accept) begin
+            // -- accumulate stage. A completed pixel replacing one that is
+            // simultaneously moving on keeps p_vld set, which is why this
+            // assignment takes precedence over the clear below.
+            if (m_to_a) begin
                 acc <= acc_next;
-                if (s_last) begin
-                    m_data  <= clamped;
-                    m_sat   <= sat_hi | sat_lo;
-                    m_valid <= 1'b1;
+                if (last_q) begin
+                    acc_final <= acc_next;
+                    p_tag     <= tag_q;
+                    p_vld     <= 1'b1;
+                end else if (p_to_m) begin
+                    p_vld     <= 1'b0;
                 end
+            end else if (p_to_m) begin
+                p_vld <= 1'b0;
+            end
+
+            // -- multiply stage
+            if (accept) begin
+                for (int i = 0; i < 9; i++) prod_q[i] <= prod[i];
+                first_q <= s_first;
+                last_q  <= s_last;
+                tag_q   <= s_tag;
+                mq_vld  <= 1'b1;
+            end else if (m_to_a) begin
+                mq_vld  <= 1'b0;
             end
         end
     end

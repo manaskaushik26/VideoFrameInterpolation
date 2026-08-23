@@ -36,19 +36,19 @@ module tb_conv_mac_3x3;
 
     logic [9*DATA_W-1:0]      s_window;
     logic [9*WEIGHT_W-1:0]    s_weights;
-    logic                     s_first, s_last, s_valid;
+    logic                     s_first, s_last, s_tag, s_valid;
     logic                     s_ready;
     logic signed [DATA_W-1:0] m_data;
-    logic                     m_sat, m_valid, m_ready;
+    logic                     m_sat, m_tag, m_valid, m_ready;
 
     conv_mac_3x3 #(
         .DATA_W (DATA_W), .WEIGHT_W (WEIGHT_W), .ACC_W (ACC_W), .OUT_SHIFT (OUT_SHIFT)
     ) dut (
         .clk (clk), .rst_n (rst_n),
         .s_window (s_window), .s_weights (s_weights),
-        .s_first (s_first), .s_last (s_last),
+        .s_first (s_first), .s_last (s_last), .s_tag (s_tag),
         .s_valid (s_valid), .s_ready (s_ready),
-        .m_data (m_data), .m_sat (m_sat),
+        .m_data (m_data), .m_sat (m_sat), .m_tag (m_tag),
         .m_valid (m_valid), .m_ready (m_ready)
     );
 
@@ -192,7 +192,7 @@ module tb_conv_mac_3x3;
         checked = 0;
         stall_in = 0; stall_out = 0;
         s_window = '0; s_weights = '0;
-        s_first = 0; s_last = 0; s_valid = 0;
+        s_first = 0; s_last = 0; s_tag = 0; s_valid = 0;
 
         rst_n = 0;
         repeat (3) @(posedge clk);

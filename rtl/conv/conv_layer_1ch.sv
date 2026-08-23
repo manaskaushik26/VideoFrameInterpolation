@@ -65,19 +65,10 @@ module conv_layer_1ch #(
         .clk (clk), .rst_n (rst_n),
         .s_window (win_data), .s_weights (weights),
         .s_first (1'b1), .s_last (1'b1),          // one channel: every beat completes a pixel
+        .s_tag   (win_last),
         .s_valid (win_valid), .s_ready (win_ready),
-        .m_data (m_data), .m_sat (m_sat),
+        .m_data (m_data), .m_sat (m_sat), .m_tag (m_last),
         .m_valid (m_valid), .m_ready (m_ready)
     );
-
-    // Carry end-of-frame alongside the MAC's output register. Valid only because
-    // s_last is tied high, so each accepted window yields exactly one output on
-    // the next cycle and this flag stays in step with m_data. A multi-channel
-    // version cannot reuse this -- there the relationship is C beats to one
-    // output, and end-of-frame has to be tracked on the last channel only.
-    always_ff @(posedge clk) begin
-        if (!rst_n)                        m_last <= 1'b0;
-        else if (win_valid && win_ready)   m_last <= win_last;
-    end
 
 endmodule

@@ -75,16 +75,10 @@ module conv_layer_mc #(
         .clk (clk), .rst_n (rst_n),
         .s_window (win_data), .s_weights (kernel),
         .s_first (win_first), .s_last (win_last_ch),
+        .s_tag   (win_last_frame),
         .s_valid (win_valid), .s_ready (win_ready),
-        .m_data (m_data), .m_sat (m_sat),
+        .m_data (m_data), .m_sat (m_sat), .m_tag (m_last),
         .m_valid (m_valid), .m_ready (m_ready)
     );
-
-    // End-of-frame rides with the beat that completes a pixel, which is the only
-    // beat that produces an output, so this stays in step with m_data.
-    always_ff @(posedge clk) begin
-        if (!rst_n)                                       m_last <= 1'b0;
-        else if (win_valid && win_ready && win_last_ch)   m_last <= win_last_frame;
-    end
 
 endmodule

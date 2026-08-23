@@ -206,10 +206,39 @@ Built so far:
 - **`conv_layer_1ch.sv`**, **`conv_layer_mc.sv`** — the two composed above, forming complete
   convolutions. `conv_layer_mc` is the N=1 case of a real layer.
 
-**A layer with N output channels is N `conv_mac_3x3` instances sharing one `line_buffer_mc`**, each
-with its own kernels, all consuming the same window stream. The line buffer is the BRAM cost and is
-amortised across all N; the MACs are the DSP cost at 9 each. 220 DSPs ⇒ ~24 output channels in
-flight. That is the shape the sequencer should build on.
+- **`conv_layer.sv`** — the real layer: one `line_buffer_mc` driving N_OUT `conv_mac_3x3`
+  instances, each with its own kernels, plus a weight write port.
+
+**Measured, not estimated** (`syn/ooc_synth.tcl`, `xc7z020clg400-1`, `conv_layer` at 112x112,
+CH_IN=6, **N_OUT=24**):
+
+| | Used | Available | |
+|---|---|---|---|
+| DSP48E1 | **216** | 220 | 98% — N_OUT=24 is the hard ceiling |
+| LUT (logic) | 14,753 | 53,200 | 28% |
+| Registers | 24,022 | 106,400 | 23% |
+| Block RAM | 1 | 140 | grows with CH_IN |
+
+**Timing: met at 100 MHz, +1.386 ns slack, 0 failing endpoints.** That required three pipeline
+stages in `conv_mac_3x3` (multiply -> accumulate -> requantise) and is not optional: the one-stage
+version measured -10.6 ns and the two-stage -5.6 ns. Registering the products is what lets synthesis
+use the DSP48E1's own output register. **If you restructure the MAC, re-measure — do not assume.**
+
+```powershell
+$env:PATH = "C:\Users\manas\Downloads\2025.1\Vivado\bin;$env:PATH"
+cd build\syn
+vivado -mode batch -source ..\..\syn\ooc_synth.tcl  -tclargs conv_layer ..\..\rtl "IMG_W=112 IMG_H=112 CH_IN=6 N_OUT=24"
+vivado -mode batch -source ..\..\syn\ooc_timing.tcl -tclargs conv_layer ..\..\rtl 10.0 "N_OUT=24"
+```
+
+Two Vivado gotchas, both encoded in those scripts: `-generic` **corrupts any parameter used as a
+part-select width** (`x[i*W +: W]`), and synthesis then fails with "range width must be a positive
+integer" — override only parameters used in plain arithmetic. And PowerShell silently drops an
+empty-string argument, shifting every later `-tclargs` position.
+
+**A layer with more than N_OUT output channels runs as ceil(C_out/N_OUT) passes over the input.**
+Where the input lives between passes — and between layers, since a 112x112x64 map is 12.8 Mbit and
+cannot stay on chip — is the sequencer's problem and is still open.
 
 Two conventions these establish, both of which the old design violated:
 
