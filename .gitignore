@@ -14,3 +14,12 @@ VideoFrameInterpolation - Copy/
 *.dcp
 .claude/
 *.lnk
+
+# simulation scratch (xsim + icarus); all confined to build/
+build/
+xsim.dir/
+*.vcd
+*.wdb
+*.pb
+*.vvp
+*.xvlog.f

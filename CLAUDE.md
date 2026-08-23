@@ -71,12 +71,52 @@ the golden reference that makes verification possible at all.
 
 ## Environment
 
-**Vivado is not installed on this machine** (not on `PATH`, absent from `C:\Xilinx` and every other
-standard location; only a `C:` drive exists). You cannot build, synthesise, or simulate here — do
-not propose running a flow and reporting results. Reason about the RTL by reading it and the
-committed logs under `*.runs/`.
+**Vivado 2025.1 is installed, in a non-standard location** — `C:\Users\manas\Downloads\2025.1\Vivado`
+— with a licence at `C:\Users\manas\Downloads\Xilinx.lic`. It is **not on `PATH`** and there is no
+`C:\Xilinx`, so `which vivado` finds nothing and a search of the usual directories comes up empty.
+Do not conclude from that that it is missing. Put it on `PATH` first:
 
-When commands do run, they are Vivado batch mode from a shell with the toolchain on `PATH`:
+```bash
+export PATH="/c/Users/manas/Downloads/2025.1/Vivado/bin:$PATH"
+vivado -version          # v2025.1, verified working
+```
+
+`xvlog` / `xelab` / `xsim` live in the same `bin` directory. Vivado startup is slow (~1 min); give
+batch invocations a generous timeout.
+
+**`xsim` is the preferred simulator** — the owner works in Vivado and is most comfortable there.
+Use `sim\run_xsim.ps1`, which sets the Vivado path, keeps all scratch output in `build\`, and works
+around two Windows-specific traps documented in the script:
+
+```powershell
+.\sim\run_xsim.ps1 -Tb tb_line_buffer_3x3 -Sources rtl\conv\line_buffer_3x3.sv
+.\sim\run_xsim.ps1 -Tb tb_line_buffer_3x3 -Sources rtl\conv\line_buffer_3x3.sv `
+                   -Defines @{TB_IMG_W=224; TB_IMG_H=224}
+```
+
+Do not hand-roll `xvlog` calls with defines on the command line. PowerShell 5.1 mangles native
+arguments containing `=`, turning `-d W=224` into a define plus a phantom filename; and
+`Set-Content -Encoding utf8` writes a BOM that corrupts the first line of an `-f` options file,
+silently dropping `-sv` so every SystemVerilog source fails to parse. The script handles both.
+
+**oss-cad-suite is also installed** at `C:\Users\manas\Downloads\oss-cad-suite\bin`. Its binaries
+will not run from the Bash tool — they exit 127 unless the suite's environment is loaded first, and
+`which iverilog` resolving is not evidence that it works. From PowerShell:
+
+```powershell
+. "C:\Users\manas\Downloads\oss-cad-suite\environment.ps1"
+iverilog -g2012 -o build\lb.vvp sim\tb_x.sv rtl\x.sv;  vvp build\lb.vvp
+verilator --lint-only -Wall -Wno-DECLFILENAME --top-module x rtl\x.sv
+```
+
+Icarus is useful as a fast second opinion (seconds, versus ~1 min for an `xsim` elaborate), and
+`verilator --lint-only -Wall` is worth running on anything new: implicit width truncation is exactly
+what silently produced the constant-zero design, and Verilator errors where Vivado only warned.
+
+Python 3.14 is at `C:\Python314`, but **`numpy`, `torch`, and `cv2` are all absent** — the reference
+model and training work need those installed first. No CUDA.
+
+Vivado commands (after putting it on `PATH` as above):
 
 ```bash
 # Open a project in the GUI
@@ -89,11 +129,10 @@ vivado -mode batch -source build.tcl        # no build.tcl exists yet; write one
 vivado -mode tcl -source script.tcl "VFI FPGA/<proj>/<proj>.xpr"
 ```
 
-Standalone simulation of one module (each per-module folder is its own Vivado project with its own
-testbench — this is how individual modules get tested):
+Each per-module folder is its own Vivado project with its own testbench, runnable via the standalone
+`xsim` flow:
 
 ```bash
-# Compile, elaborate, run one testbench with the standalone xsim flow
 xvlog -sv tb_lif_neuron.v lif_neuron.v
 xelab -debug typical tb_lif_neuron -s tb_lif_neuron_sim
 xsim tb_lif_neuron_sim -runall
@@ -121,6 +160,31 @@ is pushed.
 `git push origin main`, and the two clones will diverge silently in the meantime.
 
 ## Repository layout
+
+### The conv-engine rebuild (new work, start here)
+
+```
+rtl/conv/     new streaming convolution RTL — the replacement design
+sim/          testbenches + run_xsim.ps1
+model/        (empty) bit-exact Python reference, once numpy is available
+build/        simulation scratch, gitignored
+```
+
+These are plain source directories, deliberately **not** a Vivado project — the RTL is developed and
+verified standalone, then added to a project once it works. That inversion is the point: the old
+design's defining failure was that the Vivado flow reported success on logic that computed nothing.
+
+Built so far: `rtl/conv/line_buffer_3x3.sv`, a `same`-padded 3×3 window generator with full
+valid/ready handshaking. Verified by `sim/tb_line_buffer_3x3.sv`, which recomputes every expected
+window from an independent reference array and compares tap by tap, across three backpressure
+regimes (no stalls, input stalls, both sides stalling) and geometries from 1×1 up to 224×224.
+
+**Trained weights are not needed to build or verify this.** Whether the hardware computes a
+convolution correctly is an arithmetic property; random stimulus tests it perfectly well. RTL work
+is therefore fully decoupled from the training critical path and the two can proceed in parallel —
+which is the main reason not to wait on §11 Step 1.
+
+### The old design
 
 `VFI FPGA/` holds one integrated Vivado project plus nine per-module scratch projects. Each scratch
 project (`lif_neuron/`, `readout/`, `spike_routing/`, `buffering/`, `synapse_accumulation/`,
