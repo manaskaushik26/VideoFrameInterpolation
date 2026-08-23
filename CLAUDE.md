@@ -199,6 +199,17 @@ Built so far:
 - **`conv_mac_3x3.sv`** — nine Q1.15 multiplies (one DSP48E1 each) accumulated across input
   channels under caller-driven `first`/`last`, then rounded and saturated back to Q1.15. Verified
   against a 64-bit reference where wrapping is impossible.
+- **`line_buffer_mc.sv`** — the multi-channel line buffer, and the block a real layer uses. Emits
+  one window per channel tagged `m_ch` / `m_first` / `m_last_ch`, which is exactly the stream
+  `conv_mac_3x3` consumes. Two-stage pipeline because the line stores must be BRAM at scale
+  (2·112·128·16b = 0.46 Mbit) and BRAM reads are registered.
+- **`conv_layer_1ch.sv`**, **`conv_layer_mc.sv`** — the two composed above, forming complete
+  convolutions. `conv_layer_mc` is the N=1 case of a real layer.
+
+**A layer with N output channels is N `conv_mac_3x3` instances sharing one `line_buffer_mc`**, each
+with its own kernels, all consuming the same window stream. The line buffer is the BRAM cost and is
+amortised across all N; the MACs are the DSP cost at 9 each. 220 DSPs ⇒ ~24 output channels in
+flight. That is the shape the sequencer should build on.
 
 Two conventions these establish, both of which the old design violated:
 
@@ -284,9 +295,15 @@ checks the end-to-end result against a full software reference, not just the blo
 contract. Handshake mismatches, window-ordering errors and `first`/`last` sequencing bugs are only
 visible there.
 
-Current integration coverage: `sim/tb_conv_layer_1ch.sv` drives a whole image through
-`line_buffer_3x3` → `conv_mac_3x3` and compares against a full 2D cross-correlation computed in the
-testbench.
+Current integration coverage:
+
+- `sim/tb_conv_layer_1ch.sv` — `line_buffer_3x3` → `conv_mac_3x3`, checked against a 2D
+  cross-correlation.
+- `sim/tb_conv_layer_mc.sv` — `line_buffer_mc` → `conv_mac_3x3`, checked against a full 3D
+  cross-correlation summed over input channels. Verified to 112×112×6.
+
+Both run frames back to back with **no reset between them**, because "drains cleanly once" and
+"drains cleanly every time" are different properties and only the second one ships.
 
 ## Direction of work
 
