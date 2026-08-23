@@ -26,3 +26,7 @@ xsim.dir/
 
 # Vivado drops this in whatever directory it is launched from
 dfx_runtime.txt
+
+# in-memory Vivado projects leave these where they are launched
+.srcs/
+.gen/
