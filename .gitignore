@@ -23,3 +23,6 @@ xsim.dir/
 *.pb
 *.vvp
 *.xvlog.f
+
+# Vivado drops this in whatever directory it is launched from
+dfx_runtime.txt

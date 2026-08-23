@@ -53,15 +53,9 @@ create_bd_design $bd_name
 
 set ps [create_bd_cell -type ip -vlnv xilinx.com:ip:processing_system7:5.5 ps7]
 source [file join $repo syn ps7_config.tcl]
+# One 100 MHz FCLK, one HP slave for the DMAs to reach DDR, one GP master for
+# control. See syn/ps7_config.tcl for why only PL-facing settings are set.
 vfi_configure_ps7 $ps
-# One 100 MHz FCLK, one HP port for the DMAs to reach DDR, one GP master for
-# control, and the GP slave the DMAs use.
-set_property -dict [list \
-    CONFIG.PCW_USE_S_AXI_HP0 {1} \
-    CONFIG.PCW_M_AXI_GP0_ENABLE_STATIC_REMAP {0} \
-    CONFIG.PCW_EN_CLK0_PORT {1} \
-    CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {100} \
-] $ps
 
 set rst [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_100]
 
