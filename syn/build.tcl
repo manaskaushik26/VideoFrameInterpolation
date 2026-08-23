@@ -21,7 +21,17 @@
 # at most one MM2S and one S2MM. Both are in simple mode (no scatter-gather),
 # matching what the PYNQ `pynq.lib.DMA` driver expects.
 
-set out_dir [expr {$argc > 0 ? [lindex $argv 0] : "build/vivado"}]
+# Default build location is OUTSIDE the repo, and that is deliberate.
+#
+# This repository lives under OneDrive. A Vivado project is tens of thousands of
+# small files, and the sync client holds handles on them while Vivado is writing:
+# the build fails partway with "[Common 17-1293] The path '.../vfi.cache/wt'
+# already exists, is a directory, but is not writable", and xelab hits the same
+# thing on its scratch directories. Building to LOCALAPPDATA avoids it entirely.
+#
+# Pass an explicit path as the first argument to override.
+set default_out [file join $::env(LOCALAPPDATA) vfi_build]
+set out_dir [expr {$argc > 0 ? [lindex $argv 0] : $default_out}]
 set n_out   [expr {$argc > 1 ? [lindex $argv 1] : 24}]
 set max_ch  [expr {$argc > 2 ? [lindex $argv 2] : 128}]
 

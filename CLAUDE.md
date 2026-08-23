@@ -391,6 +391,51 @@ The BRAM output therefore lands in the same cycle as the window it belongs to, w
 and no alignment hazard. **Do not "simplify" this to read on `m_ch`** — that is a cycle late, and
 every pixel would be convolved with the previous channel's kernel.
 
+### Building a bitstream
+
+```powershell
+$env:PATH = "C:\Users\manas\Downloads\2025.1\Vivado\bin;$env:PATH"
+vivado -mode batch -source syn\build.tcl                       # defaults: N_OUT=24, MAX_CH=128
+vivado -mode batch -source syn\build.tcl -tclargs <dir> 8 8    # smaller, for a fast build
+```
+
+`syn/build.tcl` generates everything — project, block design, synthesis, implementation, bitstream,
+XSA. The project directory is disposable; the sources of truth are `rtl/`, `syn/build.tcl` and
+`syn/ps7_config.tcl`. The old project's state lived in a `.xpr` nobody could reproduce, its
+top-level synthesis had never completed, and its committed bitstream was stale and from a different
+block design.
+
+```
+PS7 --smc_ctrl-- vfi/s_axi, dma_fm lite, dma_wt lite      (control)
+    --smc_mem--- dma_fm MM2S/S2MM, dma_wt MM2S -> HP0     (DDR)
+    dma_wt MM2S -> vfi/s_wt      dma_fm MM2S -> vfi/s_axis      vfi/m_axis -> dma_fm S2MM
+```
+
+**It builds to `%LOCALAPPDATA%\vfi_build`, outside the repo, deliberately.** This repo is under
+OneDrive; a Vivado project is tens of thousands of small files and the sync client holds handles on
+them mid-build. The failure is `[Common 17-1293] The path '...vfi.cache/wt' already exists, is a
+directory, but is not writable`. **`xelab` hits the same thing** on its scratch directories — that
+is why `run_xsim.ps1` does not trust its exit code. If a tool fails on a file it just created, OneDrive
+is the first suspect.
+
+Four Vivado constraints this script encodes; do not "simplify" them away:
+
+- **Replaying a full PS7 preset does not work.** Most of the 525 `PCW_*` properties are read-only
+  derived values, and some MIO strings break Tcl parsing when replayed as a dict. It is also
+  unnecessary — PYNQ applies DDR/MIO at boot, so an overlay needs only FCLK, the GP master and the
+  HP slave. `syn/ps7_config.tcl` is that short list.
+- **A SystemVerilog file cannot be the top of a BD module reference** (`[filemgmt 56-195]`), hence
+  `rtl/axis/vfi_top_v.v`, a plain Verilog-2001 wrapper that adds no logic.
+- **`apply_bd_automation` fails** with `[Ip 78-87] Error found in procedure get_rule_options` once
+  more than one master is attached, even with `S_AXI_HP0` correctly enabled — verified by probing
+  the configured PS7 cell. Both interconnects are built explicitly instead.
+- **`Synth 8-689` (width mismatch) and `8-7023` (port count) are promoted to ERROR.** Those two
+  warnings are what let the old design synthesise a constant-zero netlist and report success. There
+  is deliberately no `allow_unconstrained_io.tcl`.
+
+No user XDC is needed: every physical pin belongs to PS7's fixed DDR/MIO interface, and the clock
+comes from `FCLK_CLK0`.
+
 ### Assumed dataflow (decided 2026-08-23, revisit if wrong)
 
 Intermediates round-trip through DDR via AXI-DMA, **one DMA transaction per layer pass**, with the PS
