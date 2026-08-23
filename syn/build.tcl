@@ -36,7 +36,7 @@ file mkdir $out_dir
 create_project -force $proj $out_dir -part $part
 
 # ---------------------------------------------------------------- sources
-set rtl [glob -nocomplain [file join $repo rtl * *.sv] [file join $repo rtl *.sv]]
+set rtl [glob -nocomplain [file join $repo rtl * *.sv] [file join $repo rtl *.sv]                           [file join $repo rtl * *.v]  [file join $repo rtl *.v]]
 if {[llength $rtl] == 0} { error "no RTL found under $repo/rtl" }
 add_files -norecurse $rtl
 set_property file_type SystemVerilog [get_files *.sv]
@@ -59,9 +59,12 @@ vfi_configure_ps7 $ps
 
 set rst [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_100]
 
-# The IP under test, as a module reference. Its ports are named so Vivado infers
-# aclk/aresetn and the AXI interfaces automatically; see vfi_top's header.
-set dut [create_bd_cell -type module -reference vfi_top vfi]
+# The IP under test, as a module reference. Referenced through vfi_top_v, a
+# plain Verilog wrapper: Vivado rejects a SystemVerilog file as the top of a
+# module reference ("[filemgmt 56-195] ... not allowed as the top file"). Ports
+# are named so the BD infers aclk/aresetn and the AXI interfaces; see vfi_top's
+# header.
+set dut [create_bd_cell -type module -reference vfi_top_v vfi]
 set_property -dict [list \
     CONFIG.N_OUT  $n_out \
     CONFIG.MAX_CH $max_ch \
@@ -113,20 +116,37 @@ connect_bd_net [get_bd_pins rst_100/peripheral_aresetn] \
                [get_bd_pins vfi/aresetn] \
                [get_bd_pins dma_fm/axi_resetn] [get_bd_pins dma_wt/axi_resetn]
 
-# Control path (PS -> AXI-Lite slaves) and memory path (DMAs -> DDR).
-apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config \
-    [list Master {/ps7/M_AXI_GP0} Clk {/ps7/FCLK_CLK0}] [get_bd_intf_pins vfi/s_axi]
-apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config \
-    [list Master {/ps7/M_AXI_GP0} Clk {/ps7/FCLK_CLK0}] [get_bd_intf_pins dma_fm/S_AXI_LITE]
-apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config \
-    [list Master {/ps7/M_AXI_GP0} Clk {/ps7/FCLK_CLK0}] [get_bd_intf_pins dma_wt/S_AXI_LITE]
+# Interconnects, built explicitly rather than by apply_bd_automation.
+#
+# The automation route failed here with "[Ip 78-87] Error found in procedure
+# get_rule_options" once more than one master had been connected, even though
+# S_AXI_HP0 was enabled and present on PS7 -- verified by probing the configured
+# cell directly. Building the two smartconnects by hand is deterministic, and it
+# puts the topology in the script instead of leaving it implicit in a tool rule.
+#
+#   control: ps7/M_AXI_GP0 -> { vfi/s_axi, dma_fm lite, dma_wt lite }
+#   memory:  { dma_fm MM2S, dma_fm S2MM, dma_wt MM2S } -> ps7/S_AXI_HP0
 
-apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config \
-    [list Slave {/ps7/S_AXI_HP0} Clk {/ps7/FCLK_CLK0}] [get_bd_intf_pins dma_fm/M_AXI_MM2S]
-apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config \
-    [list Slave {/ps7/S_AXI_HP0} Clk {/ps7/FCLK_CLK0}] [get_bd_intf_pins dma_fm/M_AXI_S2MM]
-apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config \
-    [list Slave {/ps7/S_AXI_HP0} Clk {/ps7/FCLK_CLK0}] [get_bd_intf_pins dma_wt/M_AXI_MM2S]
+set smc_ctrl [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smc_ctrl]
+set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {3}] $smc_ctrl
+connect_bd_net [get_bd_pins ps7/FCLK_CLK0]              [get_bd_pins smc_ctrl/aclk]
+connect_bd_net [get_bd_pins rst_100/peripheral_aresetn] [get_bd_pins smc_ctrl/aresetn]
+connect_bd_net [get_bd_pins ps7/FCLK_CLK0]              [get_bd_pins ps7/M_AXI_GP0_ACLK]
+connect_bd_intf_net [get_bd_intf_pins ps7/M_AXI_GP0]    [get_bd_intf_pins smc_ctrl/S00_AXI]
+connect_bd_intf_net [get_bd_intf_pins smc_ctrl/M00_AXI] [get_bd_intf_pins vfi/s_axi]
+connect_bd_intf_net [get_bd_intf_pins smc_ctrl/M01_AXI] [get_bd_intf_pins dma_fm/S_AXI_LITE]
+connect_bd_intf_net [get_bd_intf_pins smc_ctrl/M02_AXI] [get_bd_intf_pins dma_wt/S_AXI_LITE]
+
+set smc_mem [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smc_mem]
+set_property -dict [list CONFIG.NUM_SI {3} CONFIG.NUM_MI {1}] $smc_mem
+connect_bd_net [get_bd_pins ps7/FCLK_CLK0]              [get_bd_pins smc_mem/aclk]
+connect_bd_net [get_bd_pins rst_100/peripheral_aresetn] [get_bd_pins smc_mem/aresetn]
+connect_bd_net [get_bd_pins ps7/FCLK_CLK0]              [get_bd_pins ps7/S_AXI_HP0_ACLK]
+connect_bd_intf_net [get_bd_intf_pins dma_fm/M_AXI_MM2S] [get_bd_intf_pins smc_mem/S00_AXI]
+connect_bd_intf_net [get_bd_intf_pins dma_fm/M_AXI_S2MM] [get_bd_intf_pins smc_mem/S01_AXI]
+connect_bd_intf_net [get_bd_intf_pins dma_wt/M_AXI_MM2S] [get_bd_intf_pins smc_mem/S02_AXI]
+connect_bd_intf_net [get_bd_intf_pins smc_mem/M00_AXI]   [get_bd_intf_pins ps7/S_AXI_HP0]
+
 
 assign_bd_address
 regenerate_bd_layout
