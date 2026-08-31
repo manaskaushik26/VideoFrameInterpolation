@@ -70,8 +70,11 @@ create_bd_design $bd_name
 
 set ps [create_bd_cell -type ip -vlnv xilinx.com:ip:processing_system7:5.5 ps7]
 source [file join $repo syn ps7_config.tcl]
-# One 100 MHz FCLK, one HP slave for the DMAs to reach DDR, one GP master for
-# control. See syn/ps7_config.tcl for why only PL-facing settings are set.
+# One 75 MHz FCLK, one HP slave for the DMAs to reach DDR, one GP master for
+# control. See syn/ps7_config.tcl for why only PL-facing settings are set, and
+# for why the clock is 75 MHz and not 100. (The reset cell below is still named
+# rst_100 -- a stale name, not a stale setting; renaming a working BD cell was
+# not worth the churn.)
 vfi_configure_ps7 $ps
 
 set rst [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_100]

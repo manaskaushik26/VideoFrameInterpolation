@@ -43,8 +43,16 @@ foreach line [split $rpt "\n"] {
     }
 }
 
-# Timing estimate at the target clock.
-create_clock -period 10.000 -name clk [get_ports clk]
-puts "=== TIMING (100 MHz target) ==="
+# Timing estimate at the shipping clock -- 75 MHz, see syn/ps7_config.tcl.
+#
+# POST-SYNTHESIS AND OUT-OF-CONTEXT: routing here is estimated, not real. On this
+# design that estimate was optimistic by ~3.9 ns -- post-synthesis reported
+# +1.126 ns at 100 MHz where post-route reported -2.793 ns, and the failing path
+# was 82% route delay, which is precisely what this flow cannot see.
+#
+# Treat a positive number here as "not obviously broken", never as timing
+# closure. Only the post-route WNS from syn/build.tcl decides that.
+create_clock -period 13.333 -name clk [get_ports clk]
+puts "=== TIMING (75 MHz target, POST-SYNTHESIS ESTIMATE ONLY) ==="
 report_timing_summary -delay_type max -max_paths 1 -no_header
 exit 0

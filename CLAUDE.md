@@ -58,6 +58,19 @@ Also settled: `CHANNELS = 6` is **2 frames × 3 RGB**, concatenated host-side. T
 `frame_buffer` / `pixel_prev` "fetch the previous frame" mechanism is redundant — both frames are
 already in the input tensor.
 
+## ⚠ The RTL has no bias
+
+There is no bias anywhere in `rtl/`. `conv_mac_3x3`'s `round_bias` is the rounding constant and is
+unrelated; `act_unit.sv`'s own header refers to the flow layer having "only a bias", but nothing
+implements one.
+
+The flow layer needs one — `flow_bias_q15.bin` is `[-1751, -414]`. Until that changes, **the PS adds
+it after the DMA returns the feature map**, which is what `model/vfi_ref.py:add_bias` models: a
+saturating add in Q1.15, applied after requantisation rather than inside the accumulator. That is
+cheap (2 channels), costs at most 1 LSB on the final layer, and needs no change to a datapath that
+has already closed timing. If the trained model turns out to need bias inside the accumulator, that
+becomes an RTL change and the MAC's timing must be re-measured post-route.
+
 ## ⚠ The weights are not trained
 
 `snnvfi/weights/*.bin` are a freshly-initialised PyTorch network dumped to disk — proven three ways
@@ -139,8 +152,16 @@ seconds, versus ~1 min for an `xsim` elaborate. Its binaries will not run from t
 iverilog -g2012 -o build\x.vvp sim\tb_x.sv rtl\x.sv;  vvp build\x.vvp
 ```
 
-Python 3.14 is at `C:\Python314`, but **`numpy`, `torch`, and `cv2` are all absent** — the reference
-model and training work need those installed first. No CUDA.
+Python 3.14 is at `C:\Python314`. **`numpy` 2.5.2 is installed; `torch` and `cv2` are not.**
+No CUDA.
+
+These are two dependencies with two different consequences, and conflating them stalled the
+reference model for no reason:
+
+- The **bit-exact reference model needs only numpy** — it is integer arithmetic end to end.
+  `model/vfi_ref.py` exists and runs today, with no board and no torch.
+- **Training needs `torch`**, and video I/O needs `cv2`. That is still blocked, and it is the
+  critical path.
 
 Vivado commands (after putting it on `PATH` as above):
 
@@ -192,7 +213,7 @@ is pushed.
 ```
 rtl/conv/     new streaming convolution RTL — the replacement design
 sim/          testbenches + run_xsim.ps1
-model/        (empty) bit-exact Python reference, once numpy is available
+model/        bit-exact Python reference of the RTL datapath (numpy only)
 build/        simulation scratch, gitignored
 ```
 
@@ -218,8 +239,9 @@ Built so far:
 - **`conv_layer.sv`** — the real layer: one `line_buffer_mc` driving N_OUT `conv_mac_3x3`
   instances, each with its own kernels, plus a weight write port.
 
-**Measured, not estimated** (`syn/ooc_synth.tcl`, `xc7z020clg400-1`, `conv_layer` at 112x112,
-CH_IN=6, **N_OUT=24**):
+**Post-synthesis, out-of-context** (`syn/ooc_synth.tcl`, `xc7z020clg400-1`, `conv_layer` at
+112x112, CH_IN=6, **N_OUT=24**). Resource counts are reliable; the timing number is not — see
+"What the design actually runs at" below:
 
 | | Used | Available | |
 |---|---|---|---|
@@ -228,10 +250,12 @@ CH_IN=6, **N_OUT=24**):
 | Registers | 24,022 | 106,400 | 23% |
 | Block RAM | 1 | 140 | grows with CH_IN |
 
-**Timing: met at 100 MHz, +1.386 ns slack, 0 failing endpoints.** That required three pipeline
+**Post-synthesis timing at 100 MHz: +1.386 ns slack, 0 failing endpoints.** This is an OOC
+estimate and the design does not ship at 100 MHz. That required three pipeline
 stages in `conv_mac_3x3` (multiply -> accumulate -> requantise) and is not optional: the one-stage
 version measured -10.6 ns and the two-stage -5.6 ns. Registering the products is what lets synthesis
-use the DSP48E1's own output register. **If you restructure the MAC, re-measure — do not assume.**
+use the DSP48E1's own output register. **If you restructure the MAC, re-measure post-route — an
+OOC number cannot see this design's bottleneck.**
 
 ```powershell
 $env:PATH = "C:\Users\manas\Downloads\2025.1\Vivado\bin;$env:PATH"
@@ -332,6 +356,37 @@ and a wrong address in host code is far easier to debug than a frozen board.
 `soft_reset` resets the datapath only, deliberately: resetting `axil_regs` from its own write would
 drop the AXI-Lite response mid-transaction and hang the PS.
 
+### What the design actually runs at: 75 MHz, post-route
+
+**The shipping build is 75 MHz.** `syn/ps7_config.tcl` sets `PCW_FPGA0_PERIPHERAL_FREQMHZ {75}`, and
+that build meets timing post-route with 0 failing endpoints. Every utilisation and timing table in
+this file is **post-synthesis, out-of-context** — an estimate, and on this design a badly optimistic
+one:
+
+| Stage of the flow | Slack @ 100 MHz | |
+|---|---|---|
+| Post-synthesis, OOC | **+1.126 ns** | looks comfortable |
+| Post-route, full block design | **−2.793 ns** | misses by 2.8 ns |
+
+Estimated routing was optimistic by ~3.9 ns. The failing path is physical, not logical:
+
+```
+u_lb/chq_reg -> g_mac[16]/prod_q_reg
+8.672 ns = 1.551 logic (18%) + 7.121 route (82%), 4 logic levels
+```
+
+The 144-bit window is broadcast to 24 MACs and 216 DSPs span the die, so **more pipelining inside the
+MAC cannot fix this.** The real fix is pipelining the broadcast itself — two register stages between
+`line_buffer_mc` and the MAC array, splitting the route. Worth doing when frame rate actually
+matters; 75 MHz costs ~25% throughput (conv3 43 → 57 ms) and is not the binding constraint while
+there is no trained model.
+
+**Only post-route WNS counts.** `syn/ooc_synth.tcl` and `syn/ooc_timing.tcl` are screens for a design
+that is nanoseconds off; they *cannot* see this bottleneck, because the bottleneck is routing. A
+positive OOC number is not a pass. `syn/build.tcl` exits non-zero on negative post-route slack — and
+it still writes a bitstream when timing fails, so **the `.bit` existing proves nothing.** That is the
+same false success that produced the constant-zero design.
+
 ### Measured at the worst-case shape
 
 `vfi_top` at 112x112, **MAX_CH=128, N_OUT=24** — the conv4 shape — synthesised OOC on
@@ -343,7 +398,7 @@ drop the AXI-Lite response mid-transaction and hang the PS.
 | LUT | 17,239 | 53,200 | 32% |
 | Registers | 17,065 | 106,400 | 16% |
 | Block RAM | 64 | 140 | 46% |
-| **Timing @ 100 MHz** | **+1.126 ns** | | **0 failing endpoints** |
+| **Timing @ 100 MHz (post-synth)** | **+1.126 ns** | | post-route: **−2.793 ns**, hence 75 MHz |
 
 `conv_mac_3x3` needs **all four** of its pipeline stages (multiply → accumulate → round →
 shift/saturate). Each split was forced by measurement, not taste:
@@ -353,7 +408,7 @@ shift/saturate). Each split was forced by measurement, not taste:
 | 1 | -10.625 ns | accumulate + rounding add + saturate in series |
 | 2 | -5.561 ns | BRAM → DSP → 9-way adder tree → accumulate |
 | 3 | -0.320 ns | 48-bit add + barrel shift + compares, 24 levels / 17 CARRY4 |
-| **4** | **+1.126 ns** | meets |
+| **4** | **+1.126 ns** | meets post-synthesis; still −2.793 ns post-route |
 
 Two non-obvious requirements, both of which cost real slack when missed:
 
@@ -363,8 +418,8 @@ Two non-obvious requirements, both of which cost real slack when missed:
   route reappears — the "local" register ended up sourced from `g_mac[18]` feeding `g_mac[10]`, with
   the slack unchanged.
 
-**If you restructure the MAC, re-measure.** `LUT as Memory = 0` with a large register count means the
-weight memories stopped inferring BRAM.
+**If you restructure the MAC, re-measure post-route.** `LUT as Memory = 0` with a large register
+count means the weight memories stopped inferring BRAM.
 
 ### Superseded note: the weight memories must stay BRAM
 
@@ -377,7 +432,7 @@ synthesised OOC on `xc7z020clg400-1`:
 | LUT | 16,625 | 53,200 | 31% |
 | Registers | 15,351 | 106,400 | 14% |
 | Block RAM | 64 | 140 | 46% |
-| **Timing @ 100 MHz** | **+0.524 ns** | | **0 failing endpoints** |
+| **Timing @ 100 MHz (post-synth)** | **+0.524 ns** | | OOC estimate only |
 
 **The weight memories must stay BRAM.** An earlier version declared them as arrays read
 combinationally, expecting LUTRAM; Vivado inferred flip-flops and the same design measured
@@ -549,14 +604,53 @@ Current integration coverage:
   cross-correlation.
 - `sim/tb_conv_layer_mc.sv` — `line_buffer_mc` → `conv_mac_3x3`, checked against a full 3D
   cross-correlation summed over input channels. Verified to 112×112×6.
+- `model/test_vfi_ref.py` — the software reference against a naive from-the-definition
+  implementation, and against the host driver's independent one. Not RTL, but the same principle:
+  the thing you check against must itself be checked.
 
 Both run frames back to back with **no reset between them**, because "drains cleanly once" and
 "drains cleanly every time" are different properties and only the second one ships.
 
+## The reference model: `model/vfi_ref.py`
+
+The bit-exact software reference. PROJECT_CONTEXT.md section 13 calls this the highest-value thing to
+build after the conv engine, because it is what turns "is the RTL right?" into a decidable question.
+**It needs numpy only** — no torch, no cv2, no board — so it is not blocked on training and never was.
+
+It reproduces `conv_mac_3x3` + `act_unit` exactly: int64 accumulation, round-half-up by
+`1 << (shift-1)`, saturation evaluated at accumulator width *before* narrowing, then ReLU or linear.
+Conventions were read off the RTL, not assumed — cross-correlation (tap `(kr,kc)` reads
+`(y+kr-1, x+kc-1)`), `same` zero padding, `(row, col, channel)` channel-minor, kernels `(out,in,kh,kw)`
+with no transpose.
+
+`model/test_vfi_ref.py` — 39 checks, all passing. The model is not trusted on its own terms:
+
+- every result is recomputed by a naive triple-loop written from the definition, the same way
+  `sim/tb_conv_layer_mc.sv` writes its reference;
+- padding is checked tap-by-tap with a delta kernel, so an edge off-by-one shows up as a displaced
+  image rather than a slightly-wrong number;
+- **both saturation arms are asserted to actually fire**, because the superseded design's clamp was
+  unreachable code that no test noticed;
+- it is cross-checked against `host/test_vfi_driver.py`'s independently written `ref_conv`, and the
+  two agree exactly.
+
+One deliberate difference from that host mock: it flags saturation with `>=`, over-reporting a value
+that lands exactly on 32767 without clipping. `vfi_ref` follows the RTL's strict `>`.
+
+`dump()` writes a feature map as raw little-endian int16 in AXI-Stream beat order, so per-layer
+golden intermediates can be diffed against RTL output with no reordering. That per-layer comparison
+is the verification story the portfolio rests on, and it is now possible.
+
+**What it already shows.** Run on the real (untrained) weights at the neutral shift 15, activations
+attenuate about 2.7x per layer — absmax `32767 -> 13191 -> 6588 -> 2456 -> 922 -> 196`, so the flow
+layer uses 8 of its 15 bits. Concrete evidence that the per-layer `OUT_SHIFT` values matter and
+cannot be guessed. They remain a property of the trained model: **do not invent them.**
+
 ## Direction of work
 
-Per §11 of the handoff doc, in order: (1) rebuild and train the model in PyTorch with **ReLU**, which
-also becomes the golden reference; (2) scope down to 112×112 and/or cap channels at 64 *before*
+Per §11 of the handoff doc. Step 1 has since split in two, and only half of it is still blocked:
+the **golden reference exists** (`model/vfi_ref.py`, numpy, no torch), while **training** does not.
+(1) train the model in PyTorch with **ReLU**; (2) scope down to 112×112 and/or cap channels at 64 *before*
 writing RTL, since it sets the DSP array size; (3) write the line-buffered conv engine, verified
 layer-by-layer against golden intermediate dumps; (4) fix the DMA path; (5) demo — **stop here if
 time is short**; (6) only then swap ReLU → LIF for the comparison paper.
