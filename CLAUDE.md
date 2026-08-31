@@ -672,6 +672,37 @@ attenuate about 2.7x per layer — absmax `32767 -> 13191 -> 6588 -> 2456 -> 922
 layer uses 8 of its 15 bits. Concrete evidence that the per-layer `OUT_SHIFT` values matter and
 cannot be guessed. They remain a property of the trained model: **do not invent them.**
 
+## Board bring-up: `host/bringup.py`
+
+Nothing in this project has run on silicon. `host/bringup.py` is the first thing to run on the
+board, before anything else. Six stages, smallest to largest, each adding exactly one thing so a
+failure names its own cause:
+
+| | Stage | Proves |
+|---|---|---|
+| 1 | overlay loads, ID reads `0x56464931` | AXI-Lite reads, right bitstream, right instance |
+| 2 | CFG writes and reads back | AXI-Lite writes |
+| 3 | kernels DMA in, `weights_loaded` asserts | small transfer (2,592 B) |
+| 4 | feature map round trip | **large** transfer (150,528 in / 602,112 out) |
+| 5 | output matches `model/vfi_ref.py` exactly | the arithmetic |
+| 6 | `FRAMES` advanced, saturation reported | housekeeping |
+
+**Stage 3 vs stage 4 is the diagnostic split.** Stage 3 moves 2.5 KB and stage 4 moves 600 KB. Under
+the old `c_sg_length_width = 14` (16,383-byte cap) stage 3 would pass and stage 4 fail — so that exact
+pattern means an old bitstream, and `SG_LENGTH_WIDTH` in the `.hwh` should read **26**.
+
+Copy to the board: `vfi.bit`, its matching `.hwh` (same basename), `host/vfi_driver.py`, and
+`model/vfi_ref.py`. The reference model is numpy-only and runs there unchanged — which is the point
+of having built it that way.
+
+`host/test_bringup.py` runs the whole script against the mock PL from `test_vfi_driver.py`,
+retargeted to the real 112x112x24 geometry. All six stages pass with an exact 301,056-value match,
+**with no board**. It also injects three faults and requires the right diagnosis for each: an
+unprogrammed PL (stops at 1), a constant-zero datapath (stops at 4, and names it as the superseded
+design's exact failure), and a single wrong value out of 301,056 (stops at 5). A bring-up script
+whose failure paths are broken is worse than none — it sends you hunting in the wrong place with a
+board on loan.
+
 ## Direction of work
 
 Per §11 of the handoff doc. Step 1 has since split in two, and only half of it is still blocked:
