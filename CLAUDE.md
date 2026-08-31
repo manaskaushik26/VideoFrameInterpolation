@@ -152,16 +152,24 @@ seconds, versus ~1 min for an `xsim` elaborate. Its binaries will not run from t
 iverilog -g2012 -o build\x.vvp sim\tb_x.sv rtl\x.sv;  vvp build\x.vvp
 ```
 
-Python 3.14 is at `C:\Python314`. **`numpy` 2.5.2 is installed; `torch` and `cv2` are not.**
-No CUDA.
+Python 3.14 is at `C:\Python314`. Installed: **numpy 2.5.2, torch 2.13.0+cpu, opencv 5.0.0**
+(torch needs 2.9.0 or newer for a cp314 Windows wheel). **No CUDA** — `torch.cuda.is_available()`
+is False and there is no NVIDIA GPU in this machine.
 
-These are two dependencies with two different consequences, and conflating them stalled the
-reference model for no reason:
+That matters less than it looks, because **none of the local work needs torch**:
 
-- The **bit-exact reference model needs only numpy** — it is integer arithmetic end to end.
-  `model/vfi_ref.py` exists and runs today, with no board and no torch.
-- **Training needs `torch`**, and video I/O needs `cv2`. That is still blocked, and it is the
-  critical path.
+- The **bit-exact reference model needs only numpy**. `model/vfi_ref.py` runs with no board and no
+  torch, and torch would in fact be the wrong tool for it: it works in float, while the entire point
+  of the reference is to reproduce the hardware's *integer* arithmetic exactly. A nearly-right answer
+  is worse than useless when the question is "is this a real bug or a rounding difference?"
+- Everything else done here — quantising weights to Q1.15, tuning the per-layer shifts, generating
+  golden per-layer dumps — is numpy over weights that already exist.
+- **Training belongs on a GPU elsewhere.** CPU training at 112x112 is slow enough not to be worth it.
+
+**Export trained weights as `.npy` or raw int16, never as a `.pt` checkpoint.** A `.pt` can only be
+reopened by torch, which drags the training dependency into the verification path for no reason;
+`.npy` opens with numpy in one line. `model/vfi_ref.load_weights` already reads the raw
+`(out, in, kh, kw)` int16 layout that `weight_loader.sv` expects, with no transpose.
 
 Vivado commands (after putting it on `PATH` as above):
 
@@ -359,7 +367,10 @@ drop the AXI-Lite response mid-transaction and hang the PS.
 ### What the design actually runs at: 75 MHz, post-route
 
 **The shipping build is 75 MHz.** `syn/ps7_config.tcl` sets `PCW_FPGA0_PERIPHERAL_FREQMHZ {75}`, and
-that build meets timing post-route with 0 failing endpoints. Every utilisation and timing table in
+that build meets timing post-route with 0 failing endpoints — but **only just**. Measured on the
+2026-08-31 build (the one that widened the DMA length registers): **WNS +0.081 ns, WHS +0.021 ns.**
+That is 0.6% of a 13.333 ns period. It passes, and it is not a number to spend: assume any further
+logic on this clock pushes it negative, and re-measure post-route rather than hoping. Every utilisation and timing table in
 this file is **post-synthesis, out-of-context** — an estimate, and on this design a badly optimistic
 one:
 
@@ -487,6 +498,21 @@ Four Vivado constraints this script encodes; do not "simplify" them away:
 - **`Synth 8-689` (width mismatch) and `8-7023` (port count) are promoted to ERROR.** Those two
   warnings are what let the old design synthesise a constant-zero netlist and report success. There
   is deliberately no `allow_unconstrained_io.tcl`.
+
+**The DMA Buffer Length Register must be widened.** `c_sg_length_width` defaults to **14**, which
+caps a single transfer at 16,383 bytes — while every feature map here is far larger: 150,528 bytes in
+(112x112x6), 602,112 out (112x112x24), and 3,211,264 for conv4's input. Only conv1's 2,592-byte kernel
+set fits under the default. The first bitstream shipped with it, so bring-up would have passed the ID
+check, CFG and the first weight load, then failed on the first feature map. Both DMAs are now set to
+**26** (a 64 MB ceiling; 23 would cover the worst case) and the cost is a few registers.
+`host/vfi_driver.py` issues one transfer per buffer with no chunking and **should stay that way** —
+splitting a feature map in software would put a seam mid-frame that the line buffer's counters know
+nothing about.
+
+That is the second time this project produced a bitstream that builds clean and cannot work. Neither
+Vivado nor simulation can catch this one: the limit lives in an IP parameter, and no testbench models
+the DMA's length register. It was found by reading the generated `.hwh` against the driver's transfer
+sizes — worth repeating for any other IP parameter left at its default.
 
 No user XDC is needed: every physical pin belongs to PS7's fixed DDR/MIO interface, and the clock
 comes from `FCLK_CLK0`.

@@ -117,6 +117,18 @@ set_property -dict [list \
 ] $dut
 
 # Feature-map DMA: MM2S feeds the layer, S2MM collects the result.
+# Buffer Length Register width. THE DEFAULT (14) IS UNUSABLE HERE: it caps a
+# single transfer at 16,383 bytes, while every feature map in this design is far
+# larger -- 112*112*6*2 = 150,528 bytes on the way in, 112*112*24*2 = 602,112 on
+# the way out, and 112*112*128*2 = 3,211,264 for conv4's input. Only the smallest
+# weight set (conv1, 2,592 bytes) fits, so bring-up would pass the ID, CFG and
+# first kernel load and then fail on the first feature map.
+#
+# 26 bits is the IP maximum and gives a 64 MB ceiling; 23 would cover the 3.2 MB
+# worst case. The cost is a few registers in the DMA. host/vfi_driver.py issues
+# one transfer per buffer with no chunking and should stay that way -- splitting
+# a feature map in software would put a seam mid-frame that the line buffer's
+# counters know nothing about.
 set dma_fm [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dma:7.1 dma_fm]
 set_property -dict [list \
     CONFIG.c_include_sg {0} \
@@ -129,6 +141,7 @@ set_property -dict [list \
     CONFIG.c_s_axis_s2mm_tdata_width {16} \
     CONFIG.c_mm2s_burst_size {16} \
     CONFIG.c_s2mm_burst_size {16} \
+    CONFIG.c_sg_length_width {26} \
 ] $dma_fm
 
 # Weight DMA: MM2S only.
@@ -140,6 +153,7 @@ set_property -dict [list \
     CONFIG.c_m_axi_mm2s_data_width {32} \
     CONFIG.c_m_axis_mm2s_tdata_width {16} \
     CONFIG.c_mm2s_burst_size {16} \
+    CONFIG.c_sg_length_width {26} \
 ] $dma_wt
 
 # ---------------------------------------------------------------- connections
@@ -173,8 +187,28 @@ connect_bd_net [get_bd_pins rst_100/peripheral_aresetn] \
 #   control: ps7/M_AXI_GP0 -> { vfi/s_axi, dma_fm lite, dma_wt lite }
 #   memory:  { dma_fm MM2S, dma_fm S2MM, dma_wt MM2S } -> ps7/S_AXI_HP0
 
+# SmartConnect ships a SystemC/TLM simulation model, and generating it is a
+# failure path this build does not need. A run died here with
+#
+#   [IP_Flow 19-1747] Failed to deliver file '.../xlconstant_v1_1.ttcl'
+#   [IP_Flow 19-3505] Failed to generate 'SystemC Simulation' outputs
+#   [Vivado 12-4756] Launch of runs aborted
+#
+# on an internal xlconstant inside smc_mem's clock-map, while the file itself was
+# present and readable both before and after. Nothing about a bitstream needs a
+# SystemC model, so select the RTL simulation model and the whole path goes away.
+#
+# Wrapped in catch: if a future IP version drops the property, that must not be
+# what breaks the build.
+proc vfi_use_rtl_sim_model {cell} {
+    if {[catch {set_property SELECTED_SIM_MODEL rtl $cell} err]} {
+        puts "note: SELECTED_SIM_MODEL not applied ($err)"
+    }
+}
+
 set smc_ctrl [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smc_ctrl]
 set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {3}] $smc_ctrl
+vfi_use_rtl_sim_model $smc_ctrl
 connect_bd_net [get_bd_pins ps7/FCLK_CLK0]              [get_bd_pins smc_ctrl/aclk]
 connect_bd_net [get_bd_pins rst_100/peripheral_aresetn] [get_bd_pins smc_ctrl/aresetn]
 connect_bd_net [get_bd_pins ps7/FCLK_CLK0]              [get_bd_pins ps7/M_AXI_GP0_ACLK]
@@ -185,6 +219,7 @@ connect_bd_intf_net [get_bd_intf_pins smc_ctrl/M02_AXI] [get_bd_intf_pins dma_wt
 
 set smc_mem [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smc_mem]
 set_property -dict [list CONFIG.NUM_SI {3} CONFIG.NUM_MI {1}] $smc_mem
+vfi_use_rtl_sim_model $smc_mem
 connect_bd_net [get_bd_pins ps7/FCLK_CLK0]              [get_bd_pins smc_mem/aclk]
 connect_bd_net [get_bd_pins rst_100/peripheral_aresetn] [get_bd_pins smc_mem/aresetn]
 connect_bd_net [get_bd_pins ps7/FCLK_CLK0]              [get_bd_pins ps7/S_AXI_HP0_ACLK]
@@ -198,6 +233,41 @@ assign_bd_address
 regenerate_bd_layout
 validate_bd_design
 save_bd_design
+
+# ---------------------------------------------------------------- IP generation
+# Generate the block design's IP serially and up front, with retries.
+#
+# Left to launch_runs, this happens implicitly while the run is preparing
+# sub-designs, in parallel, and on this machine it fails intermittently:
+#
+#   [IP_Flow 19-1747] Failed to deliver file '<vivado install>/data/ip/...'
+#   [IP_Flow 19-167]  Failed to deliver one or more file(s).
+#   [Vivado 12-4756]  Launch of runs aborted
+#
+# A DIFFERENT file fails each run -- xlconstant_v1_1.ttcl, then ps7's xdc.xit and
+# proc_sys_reset's board.xit -- and every one of them is present, non-empty and
+# readable immediately before and after. Ruled out: disk space (522 GB free),
+# cloud-tiered files (plain Archive attributes, no reparse point), mark-of-the-web
+# (no Zone.Identifier stream), leftover Vivado processes, and Controlled Folder
+# Access. What is left is transient contention on the install directory, with
+# Defender real-time scanning the likeliest culprit.
+#
+# So: do it once, serially, and retry rather than aborting the whole build. Only
+# synthesis and implementation targets -- nothing here needs a simulation model,
+# which is also why the SmartConnects select the RTL sim model above.
+proc vfi_generate_ip {bd_file {tries 3}} {
+    for {set i 1} {$i <= $tries} {incr i} {
+        if {![catch {generate_target {synthesis implementation} $bd_file} err]} {
+            puts "=== IP generation OK (attempt $i) ==="
+            return
+        }
+        puts "WARNING: IP generation attempt $i of $tries failed: $err"
+        after 2000
+    }
+    puts "ERROR: IP generation failed after $tries attempts"
+    exit 1
+}
+vfi_generate_ip [get_files ${bd_name}.bd]
 
 # ---------------------------------------------------------------- wrapper
 make_wrapper -files [get_files ${bd_name}.bd] -top

@@ -80,7 +80,13 @@ class Vfi:
 
         from pynq import Overlay
         ol  = Overlay("vfi.bit")
-        vfi = Vfi(ol.vfi_0, ol.dma_fm, ol.dma_wt, img_w=112, img_h=112, n_out=24)
+        vfi = Vfi(ol.vfi, ol.dma_fm, ol.dma_wt, img_w=112, img_h=112, n_out=24)
+
+    The instance names are ol.vfi, ol.dma_fm and ol.dma_wt -- verified against the
+    generated vfi_bd.hwh, and set by the cell names in syn/build.tcl. It is NOT
+    ol.vfi_0: this docstring said so until the .hwh was checked, and following it
+    gives an AttributeError on the first line of bring-up. That is the same class
+    of mistake the ID-register check below exists to catch.
     """
 
     def __init__(self, ip, dma_fm, dma_wt, img_w=112, img_h=112, n_out=24,
