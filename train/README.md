@@ -82,3 +82,62 @@ python verify_export.py run_mnist/export                                 # numpy
 
 Then use `vfi_model.json`'s `shifts` for each `VfiLayer`, add `flow_bias_q15` to the returned flow,
 and convert to pixels as `q15 / 32768 * flow_px_per_unit` before `cv2.remap`.
+
+## Real-video training data (2026-10-23)
+
+The MNIST-trained export does not transfer to real footage. On `sample.mp4` it loses to the 50/50
+blend on 15 of 15 triplets (`STATUS.md`, step 4). It needs real video with real motion.
+
+### Recommended: UCF101, filtered by `pick_clips.py`
+
+- **Source:** <https://www.crcv.ucf.edu/data/UCF101/UCF101.rar>, 6.93 GB, a RAR of 13,320 `.avi`
+  clips. The server's certificate chain is incomplete: download in a browser, or with
+  `curl -k -O <url>`. Extract with 7-Zip.
+- **Why it fits:**
+  - real human motion, 101 action classes;
+  - short single-shot clips, so few scene cuts;
+  - 320x240 at 25 fps, so after the 112x112 resize typical motion between t and t+2 is a few
+    pixels — inside the six-layer ±6 px receptive field (item 6 above);
+  - plain video files, so `--videos` takes them with no new code.
+- **Why it needs filtering:**
+  - some clips barely move and teach nothing (like `sample.mp4`), and some move faster than the
+    receptive field;
+  - clips in one UCF group (`_gNN_`) share the actor and the room, so a random by-file split
+    would score validation on near-duplicates of the training data.
+
+```bash
+python pick_clips.py UCF-101/ --out clips/          # measures every clip, ~minutes
+python train_vfi.py --videos clips/train --out run_video
+python verify_export.py run_video/export
+```
+
+### What `pick_clips.py` does
+
+It measures each clip at 112x112, exactly as training resizes:
+
+- **Motion:** the 90th-percentile Farneback flow between t and t+2 must be in [0.75, 6] px.
+- **Too-fast motion:** caught separately by a warp-residual check. At 112x112 every flow
+  estimator under-reports motion beyond ~10.5 px (14 px reads as ~5), so the number alone would
+  let fast clips through.
+- **Scene cuts:** by hue/value histogram distance between neighbouring frames.
+
+Then it selects:
+
+- **one clip per (class, group)**, round-robin over classes, up to `--max-frames` (default 100k
+  frames, about 3.7 GB of RAM in `train_vfi.py`);
+- **demo candidates** into `clips/demo/`, from groups never used in training, with clear 2–5 px
+  motion. Use one for `host/demo.py` instead of `sample.mp4`.
+
+It writes `clips/picks.csv` with every clip's numbers and verdict.
+
+`test_pick_clips.py` is the known-answer test: synthetic clips with exact motion (0–14 px), a
+scene cut, and same-group duplicates. All 20 checks pass, and motion is measured to within 0.05 px.
+
+### Alternatives
+
+- **Your own footage:** a phone at 25–30 fps, steady, landscape, with a few people or cars moving
+  at walking speed. Put the files in one folder; `pick_clips.py` measures and filters them the same
+  way, treating each file as its own group. You need at least 2 files.
+- **Vimeo-90K triplets:** the standard VFI training set, and higher quality. But it ships as PNG
+  frame triplets rather than videos, so `train_vfi.py` would need a loader for it. Mirrors list the
+  archive at about 159 GB.
