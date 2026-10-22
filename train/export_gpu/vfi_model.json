@@ -1,0 +1,75 @@
+{
+  "layers": [
+    {
+      "name": "conv1",
+      "c_in": 6,
+      "c_out": 32,
+      "shift": 12,
+      "act": "relu",
+      "weight_absmax_int": 29011
+    },
+    {
+      "name": "conv2",
+      "c_in": 32,
+      "c_out": 64,
+      "shift": 12,
+      "act": "relu",
+      "weight_absmax_int": 31344
+    },
+    {
+      "name": "conv3",
+      "c_in": 64,
+      "c_out": 128,
+      "shift": 12,
+      "act": "relu",
+      "weight_absmax_int": 16444
+    },
+    {
+      "name": "conv4",
+      "c_in": 128,
+      "c_out": 64,
+      "shift": 14,
+      "act": "relu",
+      "weight_absmax_int": 32360
+    },
+    {
+      "name": "conv5",
+      "c_in": 64,
+      "c_out": 32,
+      "shift": 15,
+      "act": "relu",
+      "weight_absmax_int": 31868
+    },
+    {
+      "name": "flow",
+      "c_in": 32,
+      "c_out": 2,
+      "shift": 18,
+      "act": "linear",
+      "weight_absmax_int": 30779
+    }
+  ],
+  "flow_px_per_unit": 32.0,
+  "img": 112,
+  "input": "frame0 RGB ++ frame2 RGB, [0,1] -> Q1.15, (row, col, channel)",
+  "flow": "Q1.15 after bias; pixels = value/32768 * flow_px_per_unit; ch0=x ch1=y; frame_mid = 0.5*(remap(f0, p + 0.5*flow) + remap(f2, p - 0.5*flow))",
+  "flow_bias_q15": [
+    3,
+    -2
+  ],
+  "shifts": {
+    "conv1": 12,
+    "conv2": 12,
+    "conv3": 12,
+    "conv4": 14,
+    "conv5": 15,
+    "flow": 18
+  },
+  "heldout": {
+    "model_psnr": 21.492843627929688,
+    "blend_psnr": 14.879734992980957,
+    "copy_psnr": 13.26327896118164,
+    "hw_geometry_psnr": 26.353775024414062,
+    "mse": 0.00904559250921011
+  }
+}

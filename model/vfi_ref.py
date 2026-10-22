@@ -8,7 +8,7 @@ same accumulator width, same rounding, same saturation, same activation -- so RT
 output can be compared against it value for value rather than eyeballed.
 
 It needs numpy and nothing else. It is integer arithmetic end to end: no torch, no
-cv2, no board. Training is a separate, still-blocked problem (see CLAUDE.md).
+cv2, no board. The trained weights and shifts come from load_export().
 
 What it mirrors
 ---------------
@@ -57,7 +57,16 @@ full 112x112 forward pass takes minutes. That is the right trade for a reference
 only job is to be correct. Use small shapes in tests.
 """
 
+import json
+import os
+
 import numpy as np
+
+# The trained model the board runs: the GPU export of 2026-10-22, which replaces
+# train/export_cpu3k. On the board vfi_ref.py sits in a flat folder with no train/
+# next to it, so pass the folder holding the export's files to load_export instead.
+DEFAULT_EXPORT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "train", "export_gpu")
 
 DATA_W   = 16
 WEIGHT_W = 16
@@ -252,14 +261,40 @@ def load_weights(path, c_out, c_in):
     return v.reshape(c_out, c_in, 3, 3)
 
 
+def load_export(export_dir=DEFAULT_EXPORT):
+    """Load a train_vfi.py export: weights, per-layer shifts and the host-side bias.
+
+    -> (weights {name: (C_out, C_in, 3, 3)}, shifts {name: int},
+        bias {"flow": (2,) int16}, meta dict from vfi_model.json)
+
+    The export's layer list must be NETWORK exactly -- same order, shapes and
+    activation -- or this raises rather than run a network the RTL does not match.
+    """
+    with open(os.path.join(export_dir, "vfi_model.json")) as f:
+        meta = json.load(f)
+    got = [(l["name"], l["c_in"], l["c_out"],
+            ACT_RELU if l["act"] == "relu" else ACT_LINEAR) for l in meta["layers"]]
+    if got != NETWORK:
+        raise ValueError("%s: layers %r do not match NETWORK %r" % (export_dir, got, NETWORK))
+
+    weights = {name: load_weights(os.path.join(export_dir, "%s_weight_q15.bin" % name),
+                                  c_out, c_in)
+               for name, c_in, c_out, _ in NETWORK}
+    shifts = {name: int(meta["shifts"][name]) for name, _, _, _ in NETWORK}
+    b = np.fromfile(os.path.join(export_dir, "flow_bias_q15.bin"), dtype="<i2")
+    if b.tolist() != list(meta["flow_bias_q15"]):
+        raise ValueError("%s: flow_bias_q15.bin %r disagrees with vfi_model.json %r"
+                         % (export_dir, b.tolist(), meta["flow_bias_q15"]))
+    return weights, shifts, {"flow": b}, meta
+
+
 def forward(x, weights, shifts, bias=None, dump_dir=None, verbose=False):
     """Run the full six-layer network.
 
     x       (H, W, 6) int16 Q1.15 -- frame0 RGB ++ frame1 RGB, channel-minor
     weights {name: (C_out, C_in, 3, 3)}
-    shifts  {name: int} -- the per-layer requantisation shift. These are a property of
-            the trained model and are NOT known yet; do not invent them. Use the
-            returned sat_frac to tune them once a trained model exists.
+    shifts  {name: int} -- the per-layer requantisation shift, a property of the
+            trained model: take them from load_export(), never invent them.
     bias    {name: (C_out,)} or None -- host-side, see add_bias()
     dump_dir  if set, write each layer's output as raw int16 for RTL comparison
 
