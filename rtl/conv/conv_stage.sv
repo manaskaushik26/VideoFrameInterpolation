@@ -34,6 +34,7 @@ module conv_stage #(
 
     input  logic [$clog2(MAX_CH+1)-1:0] cfg_channels,
     input  logic [SHIFT_W-1:0]          cfg_shift,
+    input  logic                        cfg_linear,     // 1: bypass ReLU (flow layer)
 
     input  logic                        w_we,
     input  logic [$clog2(N_OUT > 1 ? N_OUT : 2)-1:0]  w_out_ch,
@@ -81,7 +82,7 @@ module conv_stage #(
     act_unit #(
         .DATA_W (DATA_W), .LANES (N_OUT), .MODE (ACT_MODE)
     ) u_act (
-        .d_in (conv_data), .d_out (act_data)
+        .linear (cfg_linear), .d_in (conv_data), .d_out (act_data)
     );
 
     always_ff @(posedge clk) begin

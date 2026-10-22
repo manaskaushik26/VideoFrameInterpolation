@@ -15,8 +15,14 @@
 //                      instead of silently wrong output.
 //   0x04  CFG      RW  [7:0]  channels  -- input channels for this layer
 //                      [13:8] shift     -- requantisation shift for this layer
-//                      Both must be written before the frame that uses them and
+//                      [14]   linear    -- 1: ReLU off for this layer (the flow
+//                                          layer); 0: ReLU on (conv1..conv5)
+//                      All must be written before the frame that uses them and
 //                      held stable for its duration; they define the frame.
+//                      `linear` resets to 0 and is active-high on purpose: a
+//                      host that writes only channels and shift -- every write
+//                      before this bit existed -- still gets ReLU, the behaviour
+//                      it was written against.
 //   0x08  CTRL     W   [0] sat_clear  (self-clearing, one-cycle pulse)
 //                      [1] soft_reset (self-clearing, one-cycle pulse)
 //   0x0C  STATUS   R   [0] weights_loaded
@@ -61,6 +67,7 @@ module axil_regs #(
     // control out
     output logic [CH_W-1:0]       cfg_channels,
     output logic [SH_W-1:0]       cfg_shift,
+    output logic                  cfg_linear,
     output logic                  sat_clear,
     output logic                  soft_reset,
 
@@ -106,7 +113,7 @@ module axil_regs #(
     always_ff @(posedge clk) begin
         // Only the CFG fields are kept; the upper bits of the merged word are
         // reserved and intentionally discarded.
-        logic [13:0] cfg_new;
+        logic [14:0] cfg_new;
 
         if (!rst_n) begin
             aw_seen       <= 1'b0;
@@ -114,6 +121,7 @@ module axil_regs #(
             s_axi_bvalid <= 1'b0;
             cfg_channels  <= CH_W'(1);
             cfg_shift     <= SH_W'(15);
+            cfg_linear    <= 1'b0;
             sat_clear     <= 1'b0;
             soft_reset    <= 1'b0;
         end else begin
@@ -137,9 +145,10 @@ module axil_regs #(
                         // Merge under the byte strobes against the current value,
                         // then split the fields back out, so a partial-word write
                         // cannot clobber the field it did not address.
-                        cfg_new      = 14'(wr_merge({18'd0, cfg_shift, cfg_channels}));
+                        cfg_new      = 15'(wr_merge({17'd0, cfg_linear, cfg_shift, cfg_channels}));
                         cfg_channels <= cfg_new[CH_W-1:0];
                         cfg_shift    <= cfg_new[8 +: SH_W];
+                        cfg_linear   <= cfg_new[14];
                     end
                     A_CTRL: begin
                         sat_clear  <= wdata_q[0];
@@ -167,7 +176,7 @@ module axil_regs #(
             if (s_axi_arvalid && s_axi_arready) begin
                 unique case (s_axi_araddr)
                     A_ID:     s_axi_rdata <= ID_MAGIC;
-                    A_CFG:    s_axi_rdata <= {18'd0, cfg_shift, cfg_channels};
+                    A_CFG:    s_axi_rdata <= {17'd0, cfg_linear, cfg_shift, cfg_channels};
                     A_STATUS: s_axi_rdata <= {30'd0, sat_sticky, weights_loaded};
                     A_FRAMES: s_axi_rdata <= frames;
                     default:  s_axi_rdata <= 32'd0;

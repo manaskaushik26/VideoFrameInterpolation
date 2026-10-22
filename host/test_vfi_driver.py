@@ -31,14 +31,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from vfi_driver import (  # noqa: E402
     Vfi, VfiLayer, VfiError, load_weight_file, quantise_q15, dequantise_q15,
     REG_ID, REG_CFG, REG_CTRL, REG_STATUS, REG_FRAMES, ID_MAGIC,
-    STATUS_WEIGHTS_LOADED, STATUS_SAT_STICKY,
+    STATUS_WEIGHTS_LOADED, STATUS_SAT_STICKY, CFG_LINEAR, load_model, add_flow_bias,
 )
 
 IMG_W, IMG_H, N_OUT = 8, 6, 4
 
 
-def ref_conv(fmap, kernels, shift):
-    """Same-padded cross-correlation + requantise + ReLU, in 64-bit."""
+def ref_conv(fmap, kernels, shift, linear=False):
+    """Same-padded cross-correlation + requantise + ReLU (unless linear), in 64-bit."""
     h, w, c_in = fmap.shape
     n_out = kernels.shape[0]
     x = fmap.astype(np.int64)
@@ -55,7 +55,8 @@ def ref_conv(fmap, kernels, shift):
     else:
         r = (acc + (1 << (shift - 1))) >> shift
     r = np.clip(r, -32768, 32767)
-    return np.maximum(r, 0).astype(np.int16), bool((r >= 32767).any() or (r <= -32768).any())
+    out = r if linear else np.maximum(r, 0)
+    return out.astype(np.int16), bool((r >= 32767).any() or (r <= -32768).any())
 
 
 class MockIP:
@@ -82,14 +83,14 @@ class _SendChannel:
     def transfer(self, buf):
         arr = np.array(buf, dtype=np.int16)
         cfg = self.ip.read(REG_CFG)
-        c_in, shift = cfg & 0xFF, (cfg >> 8) & 0x3F
+        c_in, shift, linear = cfg & 0xFF, (cfg >> 8) & 0x3F, bool(cfg & CFG_LINEAR)
 
         if arr.size == self.hw["n_out"] * c_in * 9:          # kernels
             self.hw["kernels"] = arr.reshape(self.hw["n_out"], c_in, 3, 3)
             self.ip.regs[REG_STATUS] |= STATUS_WEIGHTS_LOADED
         elif arr.size == IMG_H * IMG_W * c_in:               # feature map
             fmap = arr.reshape(IMG_H, IMG_W, c_in)
-            out, sat = ref_conv(fmap, self.hw["kernels"], shift)
+            out, sat = ref_conv(fmap, self.hw["kernels"], shift, linear)
             self.hw["out"] = out
             if sat:
                 self.ip.regs[REG_STATUS] |= STATUS_SAT_STICKY
@@ -199,6 +200,43 @@ def main():
                           np.zeros((4, 2, 3, 3), np.int16), VfiLayer(2, 4, 20))
     check("zeros do not report saturation",
           not any(s["saturated"] for s in st), fails)
+
+    print("--- runtime activation: CFG[14] linear ---")
+    vfi, _ = make_vfi()
+    fmap = rng.integers(-2000, 2000, (IMG_H, IMG_W, 3)).astype(np.int16)
+    kern = rng.integers(-3000, 3000, (2, 3, 3, 3)).astype(np.int16)    # flow-like, 2 out
+    got, _ = vfi.run_layer(fmap, kern, VfiLayer(3, 2, 18, "flow", linear=True))
+    exp, _ = ref_conv(fmap, kern, 18, linear=True)
+    check("linear layer returns its negative values", (got < 0).any() and np.array_equal(got, exp), fails)
+    got, _ = vfi.run_layer(fmap, kern, VfiLayer(3, 2, 18))
+    check("the next ReLU layer clears the bit again", not (got < 0).any(), fails)
+
+    # A pre-CFG[14] bitstream ignores the bit: it reads back 0 and the PL keeps
+    # applying ReLU. The driver must refuse, not return half a flow field.
+    vfi, _ = make_vfi()
+    ip = vfi.ip
+    plain_write = ip.write
+    ip.write = lambda a, v: plain_write(a, v & ~CFG_LINEAR if a == REG_CFG else v)
+    try:
+        vfi.run_layer(fmap, kern, VfiLayer(3, 2, 18, "flow", linear=True))
+        check("an old bitstream without CFG[14] is refused", False, fails)
+    except VfiError as e:
+        check("an old bitstream without CFG[14] is refused", "predates" in str(e), fails)
+
+    print("--- load_model ---")
+    export = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "train", "export_gpu")
+    if os.path.isdir(export):
+        w, layers, bias = load_model(export)
+        check("six layers, flow last and the only linear one",
+              [l.name for l in layers] == ["conv1", "conv2", "conv3", "conv4", "conv5", "flow"]
+              and [l.linear for l in layers] == [False] * 5 + [True], fails)
+        check("shifts from vfi_model.json", [l.shift for l in layers] == [12, 12, 12, 14, 15, 18], fails)
+        check("flow bias read", bias.tolist() == [3, -2], fails)
+        check("bias add saturates", add_flow_bias(np.array([[[32767, -32768]]], np.int16),
+                                                  bias).tolist() == [[[32767, -32768]]], fails)
+    else:
+        print("  skip  no train/export_gpu here")
 
     print("--- frame counter ---")
     vfi, _ = make_vfi()

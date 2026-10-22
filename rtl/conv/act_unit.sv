@@ -11,9 +11,13 @@
 // timestep loop. Keeping the activation a separate, zero-latency module is what
 // makes that swap cheap -- do not fold it into conv_mac_3x3.
 //
-//   MODE 0  passthrough (linear), for the final flow layer which has no
-//           activation, only a bias
-//   MODE 1  ReLU, the CNN activation, and what to build and train against first
+//   MODE 0  passthrough (linear), always
+//   MODE 1  ReLU, the CNN activation -- unless `linear` is high, which passes
+//           negatives through. `linear` is a runtime input (CFG[14]) because one
+//           bitstream runs all six layers and the final flow layer has no
+//           activation: its negative values are leftward/upward motion. With
+//           ReLU hardwired, as in the 2026-08-31 bitstream, about half the flow
+//           field was silently clamped to zero.
 //
 // MODE 2 is reserved for LIF. It cannot be implemented here as-is: a spiking
 // neuron carries membrane state across timesteps, so it needs clk/rst and a
@@ -27,6 +31,7 @@ module act_unit #(
     parameter int LANES  = 1,
     parameter int MODE   = 1
 )(
+    input  logic                    linear,     // 1: no ReLU this frame (flow layer)
     input  logic [LANES*DATA_W-1:0] d_in,
     output logic [LANES*DATA_W-1:0] d_out
 );
@@ -37,7 +42,7 @@ module act_unit #(
             v = $signed(d_in[i*DATA_W +: DATA_W]);
             case (MODE)
                 0:       d_out[i*DATA_W +: DATA_W] = v;
-                default: d_out[i*DATA_W +: DATA_W] = (v < 0) ? '0 : v;   // ReLU
+                default: d_out[i*DATA_W +: DATA_W] = (v < 0 && !linear) ? '0 : v;   // ReLU
             endcase
         end
     end

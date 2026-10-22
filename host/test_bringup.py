@@ -63,7 +63,7 @@ class _Corrupt:
             self._buf[0] = self._buf[0] + 1 if self._buf[0] < 32767 else 0
 
 
-def build_env(bad_id=False, corrupt=None):
+def build_env(bad_id=False, corrupt=None, no_linear=False):
     """A fake `pynq` backed by the mock PL, at the real bitstream geometry."""
     T.IMG_W, T.IMG_H = bringup.IMG_W, bringup.IMG_H
 
@@ -71,6 +71,9 @@ def build_env(bad_id=False, corrupt=None):
     ip = T.MockIP()
     if bad_id:
         ip.regs[T.REG_ID] = 0x00000000      # unprogrammed PL looks like this
+    if no_linear:                           # a bitstream from before CFG[14]
+        plain_write = ip.write
+        ip.write = lambda a, v: plain_write(a, v & ~T.CFG_LINEAR if a == T.REG_CFG else v)
     fm, wt = T.MockDma(ip, hw), T.MockDma(ip, hw)
     if corrupt:
         fm.recvchannel = _Corrupt(fm.recvchannel, corrupt)
@@ -149,12 +152,21 @@ def test_single_wrong_value_is_caught():
     check("suggests where to look", "kernel layout" in out)
 
 
+def test_old_bitstream_without_linear_bit():
+    print("--- a bitstream from before the runtime activation bit ---")
+    rc, out = run(no_linear=True)
+    check("exit code is non-zero", rc != 0)
+    check("stops at stage 2", "Stopped at stage 2" in out)
+    check("says the flow layer would lose its negatives", "negative value" in out)
+
+
 def main():
     print("bringup.py -- staged script checks\n")
     test_happy_path()
     test_bad_id_stops_at_stage_1()
     test_constant_zero_is_named()
     test_single_wrong_value_is_caught()
+    test_old_bitstream_without_linear_bit()
     print()
     if FAILS:
         print("FAIL  %d check(s) failed:" % len(FAILS))

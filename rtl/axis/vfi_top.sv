@@ -10,7 +10,7 @@
 // One convolution layer, configured at runtime. The PS runs the network by
 // repeating, per layer:
 //
-//     write CFG (channels, shift)  ->  DMA kernels  ->  DMA feature map in
+//     write CFG (channels, shift, linear)  ->  DMA kernels  ->  DMA feature map in
 //                                  ->  DMA feature map out  ->  read STATUS
 //
 // The output of one layer is the input of the next, in the same
@@ -88,6 +88,7 @@ module vfi_top #(
 
     logic [7:0] cfg_channels_r;
     logic [5:0] cfg_shift_r;
+    logic       cfg_linear_r;
     logic       sat_clear, soft_reset;
     logic       weights_loaded, sat_sticky;
 
@@ -111,6 +112,7 @@ module vfi_top #(
         .s_axi_rdata (s_axi_rdata), .s_axi_rresp (s_axi_rresp),
         .s_axi_rvalid (s_axi_rvalid), .s_axi_rready (s_axi_rready),
         .cfg_channels (cfg_channels_r), .cfg_shift (cfg_shift_r),
+        .cfg_linear (cfg_linear_r),
         .sat_clear (sat_clear), .soft_reset (soft_reset),
         .weights_loaded (weights_loaded), .sat_sticky (sat_sticky),
         .frame_tick (frame_tick)
@@ -127,6 +129,7 @@ module vfi_top #(
         .clk (aclk), .rst_n (dp_rst_n),
         .cfg_channels (CFGW'(cfg_channels_r)),
         .cfg_shift (cfg_shift_r),
+        .cfg_linear (cfg_linear_r),
         .s_wt_tdata (s_wt_tdata), .s_wt_tvalid (s_wt_tvalid), .s_wt_tready (s_wt_tready),
         .weights_loaded (weights_loaded),
         .sat_clear (sat_clear), .sat_sticky (sat_sticky),

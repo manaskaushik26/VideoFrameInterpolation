@@ -5,7 +5,7 @@
 //
 // Each layer is the full host sequence:
 //
-//     write CFG (channels, shift) -> DMA kernels -> DMA feature map in
+//     write CFG (channels, shift, linear) -> DMA kernels -> DMA feature map in
 //                                 -> DMA feature map out -> read STATUS
 //
 // and every register access goes through the real AXI4-Lite channels rather than
@@ -20,6 +20,9 @@
 //     bitstream -- the old host pointed at the wrong file and the wrong
 //     instance name
 //   - the frame counter, which distinguishes "running" from "hung"
+//   - CFG[14] `linear`: with it set, negative outputs must come out of the IP
+//     unchanged (the flow layer); with it clear again, none may. The bitstream
+//     of 2026-08-31 hardwired ReLU and clamped half the flow field to zero.
 //
 module tb_vfi_top;
 
@@ -83,7 +86,7 @@ module tb_vfi_top;
     logic signed [WEIGHT_W-1:0] kern [N_OUT][MAX_CH][3][3];
     logic signed [DATA_W-1:0]   outr [IMG_H][IMG_W][N_OUT];
 
-    int errors, checked, out_idx, cur_ch, cur_shift;
+    int errors, checked, out_idx, cur_ch, cur_shift, cur_linear, negatives;
     int stall_in, stall_out;
 
     // ---------------- AXI4-Lite host tasks ----------------
@@ -141,7 +144,7 @@ module tb_vfi_top;
             else                r = (acc + (64'sd1 <<< (cur_shift-1))) >>> cur_shift;
             if      (r > OUT_MAX) r = OUT_MAX;
             else if (r < OUT_MIN) r = OUT_MIN;
-            if (r < 0) r = 0;
+            if (r < 0 && !cur_linear) r = 0;
             return DATA_W'(r);
         end
     endfunction
@@ -216,6 +219,7 @@ module tb_vfi_top;
                             ox = (out_idx / N_OUT) % IMG_W;
                             oy = (out_idx / N_OUT) / IMG_W;
                             exp = outr[oy][ox][oc];
+                            if ($signed(m_tdata) < 0) negatives++;
                             if (m_tdata !== exp) begin
                                 errors++;
                                 if (errors <= 10)
@@ -233,15 +237,16 @@ module tb_vfi_top;
     endtask
 
     // One layer, exactly as the PS will run it.
-    task automatic run_layer(int nch, int shift);
+    task automatic run_layer(int nch, int shift, int lin = 0);
         logic [31:0] v;
         begin
-            cur_ch = nch; cur_shift = shift;
+            cur_ch = nch; cur_shift = shift; cur_linear = lin; negatives = 0;
 
-            axil_write(A_CFG, 32'(shift) << 8 | 32'(nch));
+            axil_write(A_CFG, 32'(lin) << 14 | 32'(shift) << 8 | 32'(nch));
             axil_read(A_CFG, v);
-            if (v[7:0] !== 8'(nch) || v[13:8] !== 6'(shift)) begin
-                $display("  ERROR: CFG readback %08h, expected ch=%0d shift=%0d", v, nch, shift);
+            if (v[7:0] !== 8'(nch) || v[13:8] !== 6'(shift) || v[14] !== 1'(lin)) begin
+                $display("  ERROR: CFG readback %08h, expected ch=%0d shift=%0d linear=%0d",
+                         v, nch, shift, lin);
                 errors++;
             end
 
@@ -261,8 +266,18 @@ module tb_vfi_top;
             dma_frame();
 
             axil_read(A_STATUS, v);
-            $display("  ch=%-2d shift=%-2d  status=%02h (loaded=%0b sat=%0b)",
-                     nch, shift, v[7:0], v[0], v[1]);
+            $display("  ch=%-2d shift=%-2d %s  status=%02h (loaded=%0b sat=%0b)  %0d negative outputs",
+                     nch, shift, lin ? "linear" : "relu  ", v[7:0], v[0], v[1], negatives);
+            // The reference above already demands every value match; these two
+            // make the point of CFG[14] explicit and fail loudly on their own.
+            if (lin && negatives == 0) begin
+                $display("  ERROR: linear layer produced no negative outputs -- ReLU still applied?");
+                errors++;
+            end
+            if (!lin && negatives != 0) begin
+                $display("  ERROR: ReLU layer produced %0d negative outputs", negatives);
+                errors++;
+            end
         end
     endtask
 
@@ -298,12 +313,16 @@ module tb_vfi_top;
         run_layer(1, 20);
         run_layer(4, 22);
         run_layer(MAX_CH, 22);
+        // ReLU off, as for the flow layer: negatives must pass through. Two
+        // frames back to back, then ReLU back on with no reset in between.
+        run_layer(MAX_CH, 22, 1);
+        run_layer(4, 20, 1);
         run_layer(2, 15);
 
         axil_read(A_FRAMES, v);
         $display("");
-        $display("FRAMES = %0d (expected 4)", v);
-        if (v !== 32'd4) begin
+        $display("FRAMES = %0d (expected 6)", v);
+        if (v !== 32'd6) begin
             $display("  ERROR: frame counter wrong");
             errors++;
         end
@@ -312,13 +331,13 @@ module tb_vfi_top;
         errors += out_err;
 
         $display("");
-        if (errors == 0) $display("PASS  (%0d beats, 4 layers via AXI-Lite)", checked);
+        if (errors == 0) $display("PASS  (%0d beats, 6 layers via AXI-Lite, 2 linear)", checked);
         else             $display("FAIL  %0d errors", errors);
         $finish;
     end
 
     initial begin
-        #(NPIX * MAX_CH * 4 * 10 * 150 + 3000000);
+        #(NPIX * MAX_CH * 6 * 10 * 150 + 3000000);
         $display("FAIL  timeout at out_idx=%0d", out_idx);
         $finish;
     end

@@ -49,6 +49,7 @@ module conv_stage_axis #(
 
     input  logic [$clog2(MAX_CH+1)-1:0] cfg_channels,
     input  logic [SHIFT_W-1:0]          cfg_shift,
+    input  logic                        cfg_linear,     // 1: bypass ReLU (flow layer)
 
     // AXI-Stream slave carrying this layer's kernels, DMA'd as one blob.
     // N_OUT*CH_IN*9 beats, in the flattened (out, in, kh, kw) order of the
@@ -113,7 +114,7 @@ module conv_stage_axis #(
         .ACC_W (ACC_W), .SHIFT_W (SHIFT_W), .ACT_MODE (ACT_MODE)
     ) u_stage (
         .clk (clk), .rst_n (rst_n),
-        .cfg_channels (cfg_channels), .cfg_shift (cfg_shift),
+        .cfg_channels (cfg_channels), .cfg_shift (cfg_shift), .cfg_linear (cfg_linear),
         .w_we (w_we), .w_out_ch (w_out_ch), .w_in_ch (w_in_ch), .w_data (w_data),
         .s_data (in_data), .s_valid (in_valid), .s_ready (in_ready),
         .m_data (out_data), .m_last (out_last),

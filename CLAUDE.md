@@ -71,16 +71,21 @@ cheap (2 channels), costs at most 1 LSB on the final layer, and needs no change 
 has already closed timing. If the trained model turns out to need bias inside the accumulator, that
 becomes an RTL change and the MAC's timing must be re-measured post-route.
 
-## ⚠ The weights are not trained
+## The trained model: `train/export_gpu/`
 
-`snnvfi/weights/*.bin` are a freshly-initialised PyTorch network dumped to disk — proven three ways
-in §5 of the handoff doc (uniform distribution fingerprint, ranges matching `kaiming_uniform_(a=√5)`
-to within 0.1%, flat histogram). There is **no trained model, no training script, and no golden
-reference model** anywhere.
+The model the board runs is `train/export_gpu/`, a full GPU run of `train/train_vfi.py`
+(2026-10-22): held-out 21.49 dB vs 14.88 dB for a 50/50 blend, on Moving MNIST. **Shifts, flow bias
+and weights come from its `vfi_model.json` and `.bin` files — never from this document.** It is
+loaded by `vfi_ref.load_export()` and `vfi_driver.load_model()`, and `model/check_golden.py` proves
+vfi_ref reproduces its `golden/<layer>.bin` dumps bit-exactly. Layout: `train/export_gpu/LAYOUT.md`.
+Progress against it is logged in `STATUS.md`.
 
-Never spend effort tuning quantisation or matching RTL bit-exactly against these numbers. Rebuilding
-and training the model in PyTorch is Step 1 of the plan and the critical path, because it is also
-the golden reference that makes verification possible at all.
+It was trained on Moving MNIST only and **does not transfer to real video** — on `sample.mp4` it
+invents motion and loses to the plain blend (`STATUS.md` step 4). Real-footage training
+(`train_vfi.py --videos`) is the open item for the demo.
+
+The old `snnvfi/weights/*.bin` are a freshly-initialised, untrained network (§5 of the handoff doc);
+ignore them.
 
 ## Environment
 
@@ -277,7 +282,10 @@ part-select width** (`x[i*W +: W]`), and synthesis then fails with "range width 
 integer" — override only parameters used in plain arithmetic. And PowerShell silently drops an
 empty-string argument, shifting every later `-tclargs` position.
 
-- **`act_unit.sv`** — activation, combinational, `MODE` 0 linear / 1 ReLU. **This is the only module
+- **`act_unit.sv`** — activation, combinational, `MODE` 0 linear / 1 ReLU, and in MODE 1 a runtime
+  `linear` input (CFG[14]) that turns ReLU off for one layer — the flow layer, whose negative values
+  are leftward/upward motion. Until 2026-10-23 ReLU was hardwired, so the shipped bitstream clamped
+  about half of every flow field to zero. **This is the only module
   the CNN → SNN swap touches** (§10). Keep it separate and zero-latency; do not fold it into the MAC.
   MODE 2 (LIF) will need clk/rst and a timestep enable, at which point it stops being combinational
   and every integration testbench must be re-run.
@@ -340,7 +348,7 @@ M_AXIS   output feature map              (DMA S2MM)
 The PS runs the network by repeating, per layer:
 
 ```
-write CFG (channels, shift) -> DMA kernels -> DMA feature map in
+write CFG (channels, shift, linear) -> DMA kernels -> DMA feature map in
                             -> DMA feature map out -> read STATUS
 ```
 
@@ -353,7 +361,7 @@ straight back to DDR and returns as the next layer's input with no reformatting.
 | Addr | | |
 |---|---|---|
 | 0x00 | ID | R — `0x56464931` ("VFI1"). **Read this first from the host.** The old host pointed at the wrong bitstream *and* the wrong instance name; a magic number turns both into an obvious failure instead of silently wrong output. |
-| 0x04 | CFG | RW — `[7:0]` channels, `[13:8]` shift. Write before the frame that uses them; hold stable for its duration. |
+| 0x04 | CFG | RW — `[7:0]` channels, `[13:8]` shift, `[14]` linear (1 = ReLU off; set for the flow layer only). Write before the frame that uses them; hold stable for its duration. `linear` resets to 0 and is active-high deliberately: a host that writes only channels and shift still gets ReLU. A bitstream older than 2026-10-23 reads bit 14 back as 0 — `vfi_driver` and `bringup.py` stage 2 both refuse it. |
 | 0x08 | CTRL | W — `[0]` sat_clear, `[1]` soft_reset (both self-clearing pulses) |
 | 0x0C | STATUS | R — `[0]` weights_loaded, `[1]` sat_sticky |
 | 0x10 | FRAMES | R — completed frames; distinguishes "running" from "hung" |
@@ -612,8 +620,8 @@ DSP array size, so it is a precondition for the layer sequencer, not a later opt
 defaults to `IMG_W = IMG_H = 112`. At 224×224 the network is 9.36 GMAC/frame against 220 DSPs
 (~0.3–2 fps); 112×112 is roughly 4× cheaper, and flow fields are smooth enough to upsample.
 
-Still open, and genuinely blocked on the trained model: the **per-layer `OUT_SHIFT` values**. Do not
-invent them.
+The per-layer `OUT_SHIFT` values now come from the trained export's `vfi_model.json`. Do not invent
+or hand-tune them.
 
 ## Testing policy: blocks must be tested composed, not just alone
 

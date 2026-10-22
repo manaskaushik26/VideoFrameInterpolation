@@ -11,7 +11,7 @@ The stages go from smallest to largest, each one adding exactly one thing, so a
 failure names its own cause instead of leaving you to bisect a whole system:
 
     1  overlay loads, ID register reads 0x56464931       AXI-Lite read
-    2  CFG writes and reads back                          AXI-Lite write
+    2  CFG writes and reads back, incl. CFG[14] linear    AXI-Lite write
     3  kernels DMA in, weights_loaded asserts             small transfer (2.5 KB)
     4  feature map DMA round trip returns the right size  large transfer (600 KB)
     5  the returned data matches model/vfi_ref.py exactly the arithmetic
@@ -121,15 +121,23 @@ def stage1(ctx, bit_path):
 @stage(2, "CFG register writes and reads back")
 def stage2(ctx, _):
     ip = ctx["ip"]
-    for channels, shift in [(6, 20), (128, 15), (32, 0)]:
-        ip.write(D.REG_CFG, ((shift & 0x3F) << 8) | (channels & 0xFF))
+    for channels, shift, linear in [(6, 20, False), (128, 15, True), (32, 0, False)]:
+        ip.write(D.REG_CFG, ((shift & 0x3F) << 8) | (channels & 0xFF)
+                 | (D.CFG_LINEAR if linear else 0))
         back = ip.read(D.REG_CFG)
         if (back & 0xFF) != channels or ((back >> 8) & 0x3F) != shift:
             _fail("CFG readback 0x%04X != channels=%d shift=%d"
                   % (back, channels, shift),
                   "Reads work (stage 1 passed) but writes do not land.",
                   "Check the AXI-Lite write path in rtl/axis/axil_regs.sv.")
-    return "3 configurations written and read back"
+        if bool(back & D.CFG_LINEAR) != linear:
+            _fail("CFG[14] (linear) reads back %d, wrote %d"
+                  % (bool(back & D.CFG_LINEAR), linear),
+                  "This is a bitstream from before the runtime activation bit "
+                  "(2026-10-23). It applies ReLU to every layer, so the flow "
+                  "layer would lose every negative value.",
+                  "Copy the kit's vfi.bit AND vfi.hwh again; check SHA256SUMS.txt.")
+    return "3 configurations written and read back, linear bit included"
 
 
 @stage(3, "Kernel DMA -- small transfer, weights_loaded asserts")

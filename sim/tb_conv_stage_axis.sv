@@ -55,6 +55,7 @@ module tb_conv_stage_axis;
 
     logic [CFGW-1:0]     cfg_channels;
     logic [5:0]          cfg_shift;
+    logic                cfg_linear = 1'b0;     // ReLU throughout; tb_vfi_top covers linear
 
     logic [WEIGHT_W-1:0] wt_tdata;
     logic                wt_tvalid, wt_tready, weights_loaded;
@@ -70,7 +71,7 @@ module tb_conv_stage_axis;
         .MAX_CH (MAX_CH), .N_OUT (N_OUT), .ACC_W (ACC_W), .ACT_MODE (1)
     ) dut (
         .clk (clk), .rst_n (rst_n),
-        .cfg_channels (cfg_channels), .cfg_shift (cfg_shift),
+        .cfg_channels (cfg_channels), .cfg_shift (cfg_shift), .cfg_linear (cfg_linear),
         .s_wt_tdata (wt_tdata), .s_wt_tvalid (wt_tvalid), .s_wt_tready (wt_tready),
         .weights_loaded (weights_loaded),
         .sat_clear (sat_clear), .sat_sticky (sat_sticky),
