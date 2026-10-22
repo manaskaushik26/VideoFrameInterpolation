@@ -279,8 +279,8 @@ def main(argv):
     print()
     print("PASS  all %d stages. The conv engine works on hardware, and its "
           "output is bit-exact against the reference model." % len(STAGES))
-    print("Next: cache coherency under load, then a full six-layer network "
-          "once the model is trained.")
+    print("Next: python3 conv1_board.py, then python3 network_board.py "
+          "(see BOARD_STEPS.md).")
     return 0
 
 

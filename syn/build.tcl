@@ -43,6 +43,11 @@ set bd_name vfi_bd
 puts "=== build: N_OUT=$n_out MAX_CH=$max_ch -> $out_dir ==="
 
 file mkdir $out_dir
+# Work from the output directory too. Vivado drops its .Xil scratch folder in
+# the current directory, and launched from inside the repo that is OneDrive
+# again: on 2026-10-23 write_hw_platform could not delete .Xil/.../temp.hdf
+# and exited 1 after a good bitstream, so BUILD OK was never printed.
+cd $out_dir
 create_project -force $proj $out_dir -part $part
 
 # ---------------------------------------------------------------- sources

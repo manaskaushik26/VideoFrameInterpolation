@@ -375,9 +375,11 @@ drop the AXI-Lite response mid-transaction and hang the PS.
 ### What the design actually runs at: 75 MHz, post-route
 
 **The shipping build is 75 MHz.** `syn/ps7_config.tcl` sets `PCW_FPGA0_PERIPHERAL_FREQMHZ {75}`, and
-that build meets timing post-route with 0 failing endpoints — but **only just**. Measured on the
-2026-08-31 build (the one that widened the DMA length registers): **WNS +0.081 ns, WHS +0.021 ns.**
-That is 0.6% of a 13.333 ns period. It passes, and it is not a number to spend: assume any further
+that build meets timing post-route with 0 failing endpoints — but **only just**. The current build
+(2026-10-23, which added CFG[14]) measured **WNS +0.014 ns, WHS +0.029 ns**, 0 failing of 85,306;
+the 2026-08-31 build measured +0.081 / +0.021. Same worst path both times (the line-buffer → MAC
+broadcast below), so the difference is placement variance, not the new bit. +0.014 ns is 0.1% of
+a 13.333 ns period. It passes, and it is not a number to spend: assume any further
 logic on this clock pushes it negative, and re-measure post-route rather than hoping. Every utilisation and timing table in
 this file is **post-synthesis, out-of-context** — an estimate, and on this design a badly optimistic
 one:
