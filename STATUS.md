@@ -10,7 +10,7 @@ the results survive a lost terminal. Newest step last.
 | 3 | Full network in simulation | **done** — whole network bit-exact at full 112x112 |
 | 4 | `host/demo.py` | **done** — pipeline verified; the model fails on real video (see below) |
 | 5 | Rebuild the board kit | **done** — `Desktop\vfi_board_kit`, 26 files, mock-tested from a flat copy |
-| 6 | Commit and push | not started |
+| 6 | Commit and push | **done** — pushed to GitHub `main` (`50879ae..1701425`) |
 
 ---
 
@@ -372,3 +372,56 @@ session. If a byte of it differs, the original is in OneDrive's online recycle b
 
 `make_kit.py` now never deletes: an old kit is moved to `<kit>_old_<date>_<time>`, with a numeric
 suffix if that name exists.
+
+---
+
+## Step 6 — commit and push (2026-10-23)
+
+**Pushed: `origin/main` went `50879ae..1701425`, a fast-forward.** Nothing on GitHub was overwritten.
+
+### The commits made today
+
+| | |
+|---|---|
+| `da1918c` | Import the trained GPU export; point the reference model at it |
+| `fe25e7b` | Make the flow layer's activation a runtime bit: CFG[14] linear |
+| `97233d5` | Add demo.py |
+| `dbe876a` | Verify the whole network in xsim, chained, and add its board twin |
+| `6d5ade2` | Rebuild at 75 MHz with CFG[14]; add the board kit tooling |
+| `9e1d04d` | Add STATUS.md |
+| `1701425` | Merge GitHub main |
+
+The push also carried the 26 earlier local commits that had never been pushed (the whole conv-engine
+rebuild since August), and this STATUS commit follows.
+
+### Two things found on the way
+
+- **GitHub's `main` had moved.** It held one commit this clone had never fetched: `50879ae` "Add
+  files via upload", 2026-08-04, which adds `snnvfi/` — notebooks, the untrained weights, the stale
+  `top.bit` and `sample.mp4`. It touches no file of ours, so it merged with no conflicts and the
+  push stayed a fast-forward.
+- **Branches.** The work lived on local branch `reference-model`. Local `main` was fast-forwarded to
+  the pushed commit, so the two now match. `reference-model` itself was not pushed as a separate
+  branch.
+
+---
+
+## Where this leaves the project
+
+**Verified in simulation and ready for the board:**
+
+- the whole trained network at the bitstream's exact configuration — every layer bit-exact,
+  chained;
+- the flow layer's negatives preserved;
+- a bitstream that meets 75 MHz;
+- a kit with a staged, mock-tested script for each step.
+
+**Not done, and why:**
+
+1. **Nothing has run on silicon yet.** Run `BOARD_STEPS.md` in order.
+2. **The model does not work on real video** (step 4): it loses to the blend on 15/15 triplets of
+   `sample.mp4`. It needs training on real footage with motion (`train_vfi.py --videos`), which you
+   asked me not to do now, and a demo clip that actually moves. Nothing else changes: RTL, bitstream,
+   driver and demo all take a new export as-is.
+3. **Timing margin is +0.014 ns.** It passes, but any RTL change needs a post-route re-check.
+   Pipelining the line-buffer → MAC broadcast (`CLAUDE.md`) is the fix if it ever goes negative.
