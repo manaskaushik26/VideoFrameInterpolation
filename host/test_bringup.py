@@ -35,6 +35,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "model"))
 
 import test_vfi_driver as T          # noqa: E402  (mock hardware lives here)
 import bringup                        # noqa: E402
+import perf                           # noqa: E402
+import vfi_driver as D                # noqa: E402
 
 FAILS = []
 
@@ -63,7 +65,7 @@ class _Corrupt:
             self._buf[0] = self._buf[0] + 1 if self._buf[0] < 32767 else 0
 
 
-def build_env(bad_id=False, corrupt=None, no_linear=False):
+def build_env(bad_id=False, corrupt=None, no_linear=False, fclk=None):
     """A fake `pynq` backed by the mock PL, at the real bitstream geometry."""
     T.IMG_W, T.IMG_H = bringup.IMG_W, bringup.IMG_H
 
@@ -90,6 +92,8 @@ def build_env(bad_id=False, corrupt=None, no_linear=False):
     mod = types.ModuleType("pynq")
     mod.Overlay = FakeOverlay
     mod.allocate = lambda shape, dtype: np.zeros(shape, dtype=dtype).view(Buf)
+    if fclk is not None:                    # None: a pynq with no Clocks to read
+        mod.Clocks = types.SimpleNamespace(fclk0_mhz=fclk)
     sys.modules["pynq"] = mod
 
     bit = os.path.join(tempfile.mkdtemp(), "vfi.bit")
@@ -160,6 +164,35 @@ def test_old_bitstream_without_linear_bit():
     check("says the flow layer would lose its negatives", "negative value" in out)
 
 
+def test_pl_clock():
+    print("--- FCLK0: read from the board, never assumed silently ---")
+    rc, out = run(fclk=75.0)
+    check("75 MHz passes", rc == 0)
+    check("75 MHz is reported as designed", "FCLK0 = 75.00 MHz, as designed" in out)
+
+    rc, out = run(fclk=62.5)                # 1000 MHz IO PLL / 4 / 4
+    check("62.5 MHz passes (slower is timing-safe)", rc == 0)
+    check("62.5 MHz is reported as below the design", "62.50 MHz, below the 75 MHz" in out)
+
+    rc, out = run(fclk=1000.0 / 13)         # what setting 75 by hand can round to
+    check("76.9 MHz fails", rc != 0)
+    check("76.9 MHz stops at stage 1", "Stopped at stage 1" in out)
+    check("says it is above the timed clock", "above the 75 MHz" in out)
+    check("warns against setting the clock by hand", "do not set the clock" in out)
+
+    rc, out = run()                         # a pynq with no Clocks to read
+    check("unreadable clock does not fail bring-up", rc == 0)
+    check("unreadable clock is said out loud", "FCLK0 not readable" in out)
+
+    build_env(fclk=62.5)
+    mhz, src = perf.pl_clock()
+    check("perf uses the measured clock", mhz == 62.5 and src.startswith("measured"))
+    build_env()
+    mhz, src = perf.pl_clock()
+    check("perf labels a fallback as assumed",
+          mhz == D.FCLK_DESIGN_MHZ and src.startswith("ASSUMED"))
+
+
 def main():
     print("bringup.py -- staged script checks\n")
     test_happy_path()
@@ -167,6 +200,7 @@ def main():
     test_constant_zero_is_named()
     test_single_wrong_value_is_caught()
     test_old_bitstream_without_linear_bit()
+    test_pl_clock()
     print()
     if FAILS:
         print("FAIL  %d check(s) failed:" % len(FAILS))

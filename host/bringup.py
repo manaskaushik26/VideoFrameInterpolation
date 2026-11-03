@@ -115,6 +115,28 @@ def stage1(ctx, bit_path):
               "the wrong instance and produced plausible nonsense.")
 
     ctx["ip"] = ip
+
+    # The PL clock is whatever the board's IO PLL gives under the .hwh divisors,
+    # not necessarily the 75 MHz the design was timed at -- so read it.
+    mhz = D.read_fclk0_mhz()
+    ctx["fclk_mhz"] = mhz
+    if mhz is None:
+        clk = "FCLK0 not readable (pynq.Clocks unavailable) -- perf.py will assume %.0f MHz" \
+              % D.FCLK_DESIGN_MHZ
+    elif mhz > D.FCLK_MAX_MHZ:
+        _fail("FCLK0 runs at %.2f MHz, above the %.0f MHz the bitstream was timed at"
+              % (mhz, D.FCLK_DESIGN_MHZ),
+              "Timing closes only up to 75 MHz (post-route WNS +0.014 ns); above "
+              "that the results are not guaranteed even if they look right.",
+              "Something set the clock by hand (Clocks.fclk0_mhz = 75 can round up "
+              "to 76.9 MHz). Reload the overlay and do not set the clock.")
+    elif mhz < D.FCLK_DESIGN_MHZ - 0.01:
+        clk = ("FCLK0 = %.2f MHz, below the %.0f MHz design: timing-safe, the PL is "
+               "proportionally slower (board IO PLL differs from the .hwh's 1200 MHz)"
+               % (mhz, D.FCLK_DESIGN_MHZ))
+    else:
+        clk = "FCLK0 = %.2f MHz, as designed" % mhz
+    print("      %s" % clk)
     return "ID = 0x%08X (\"VFI1\")" % got
 
 

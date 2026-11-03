@@ -67,6 +67,29 @@ STATUS_SAT_STICKY = 1 << 1
 
 TAPS = 9  # 3x3
 
+# ---------------------------------------------------------------- PL clock
+# The 2026-10-23 bitstream closes timing at 75.002 MHz post-route (WNS +0.014 ns).
+# Anything above FCLK_MAX_MHZ is outside what was signed off; the margin over 75
+# only absorbs float rounding in pynq's frequency report.
+FCLK_DESIGN_MHZ = 75.0
+FCLK_MAX_MHZ = 75.01
+
+
+def read_fclk0_mhz():
+    """
+    FCLK0 as the board actually runs it, in MHz, or None if pynq can't report it.
+
+    Read it after the Overlay has loaded. PYNQ applies only the .hwh's divisors
+    (4 x 4) to the board's own IO PLL, so this is 75 MHz only when the boot image
+    set the IO PLL to 1200 MHz; at 1000 MHz it is 62.5. Lower is safe for timing,
+    just slower. Never set Clocks.fclk0_mhz by hand: 75 can round up to 76.9.
+    """
+    try:
+        from pynq import Clocks
+        return float(Clocks.fclk0_mhz)
+    except Exception:                     # noqa: BLE001  (no pynq, mock, old pynq)
+        return None
+
 
 class VfiError(RuntimeError):
     pass

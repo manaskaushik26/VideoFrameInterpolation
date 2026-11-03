@@ -9,6 +9,11 @@ MAC array, one per cycle, so the PL's own floor at 75 MHz is
 
     112 * 112 * 6 = 75,264 cycles = 1.004 ms
 
+The floors are computed at the clock the board actually runs, read from
+pynq's Clocks.fclk0_mhz after the overlay loads (it can be below 75, e.g. 62.5
+MHz on a 1000 MHz IO PLL). If it can't be read, 75 MHz is assumed and the
+output says so.
+
 Anything above that is PS overhead: two DMA descriptors, the kernel reload, and
 pynq's buffer allocation. The gap is the interesting part -- it tells you
 whether a six-layer network will be bound by the MAC array or by the host loop,
@@ -40,7 +45,14 @@ N_OUT = 24
 MAX_CH = 128
 CH_IN = 6
 SHIFT = 20
-FCLK_MHZ = 75.0
+
+
+def pl_clock():
+    """(MHz, description) -- the measured FCLK0, or the design value, labelled."""
+    mhz = D.read_fclk0_mhz()
+    if mhz is None:
+        return D.FCLK_DESIGN_MHZ, "ASSUMED, Clocks.fclk0_mhz unreadable"
+    return mhz, "measured, Clocks.fclk0_mhz"
 
 
 def main(argv):
@@ -49,6 +61,7 @@ def main(argv):
 
     from pynq import Overlay
     ol = Overlay(bit)
+    fclk_mhz, fclk_src = pl_clock()
     vfi = D.Vfi(ol.vfi, ol.dma_fm, ol.dma_wt,
                 img_w=IMG_W, img_h=IMG_H, n_out=N_OUT, max_ch=MAX_CH)
 
@@ -64,12 +77,13 @@ def main(argv):
     ms = 1000.0 * (time.perf_counter() - t0) / iters
 
     macs = IMG_W * IMG_H * CH_IN * N_OUT * 9
-    floor_ms = 1000.0 * (IMG_W * IMG_H * CH_IN) / (FCLK_MHZ * 1e6)
+    floor_ms = 1000.0 * (IMG_W * IMG_H * CH_IN) / (fclk_mhz * 1e6)
 
+    print("PL clock        : %.2f MHz (%s)" % (fclk_mhz, fclk_src))
     print("passes          : %d (+1 warm-up)" % iters)
     print("shape           : %dx%d, CH_IN=%d, N_OUT=%d" % (IMG_W, IMG_H, CH_IN, N_OUT))
     print("per pass        : %.2f ms" % ms)
-    print("PL floor @%d MHz: %.2f ms  (one window-channel per cycle)" % (FCLK_MHZ, floor_ms))
+    print("PL floor @%.1f MHz: %.2f ms  (one window-channel per cycle)" % (fclk_mhz, floor_ms))
     print("overhead        : %.2f ms (%.0f%% of wall time is PS/DMA)"
           % (ms - floor_ms, 100.0 * (ms - floor_ms) / ms))
     print("throughput      : %.2f GMAC/s over %d MACs" % (macs / (ms * 1e6), macs))
@@ -104,11 +118,12 @@ def main(argv):
     print("  layer   passes  ms      PL floor ms")
     for layer in layers:
         passes = -(-layer.ch_out // N_OUT)
-        floor = 1000.0 * passes * IMG_W * IMG_H * max(layer.ch_in, N_OUT) / (FCLK_MHZ * 1e6)
+        floor = 1000.0 * passes * IMG_W * IMG_H * max(layer.ch_in, N_OUT) / (fclk_mhz * 1e6)
         floor_total += floor
         print("  %-6s  %d       %6.1f  %6.1f" % (layer.name, passes,
                                                   1000.0 * per_layer[layer.name] / n_net, floor))
-    print("  PL floor total %.1f ms; the rest is PS/DMA/stitching" % floor_total)
+    print("  PL floor total %.1f ms at %.2f MHz; the rest is PS/DMA/stitching"
+          % (floor_total, fclk_mhz))
     return 0
 
 

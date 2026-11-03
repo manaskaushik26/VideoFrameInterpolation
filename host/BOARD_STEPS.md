@@ -27,7 +27,9 @@ runtime ReLU-off bit for the flow layer.
 
 Copy this whole folder, **including the `export_gpu/` subfolder**, to
 `/home/xilinx/jupyter_notebooks/vfi`. Use the network share `\\192.168.2.99\xilinx`, or Jupyter's
-Upload button. In a Jupyter terminal (it runs as root):
+Upload button. In a Jupyter terminal (it runs as root). Over SSH as `xilinx`, run `sudo -i` first:
+as a normal user, bring-up stage 1 fails with `RuntimeError: Could not open device with index '0'`
+(XRT cannot open the PL), which looks like a broken overlay but is only permissions.
 
 ```bash
 cd /home/xilinx/jupyter_notebooks/vfi
@@ -43,6 +45,10 @@ python3 bringup.py
 
 Expect `PASS  all 6 stages`. The stages:
 
+- **Stage 1** also prints `FCLK0`, read from `pynq.Clocks` after the overlay loads. **Write this
+  number down.** PYNQ applies only the `.hwh`'s divisors (4 x 4) to the board's own IO PLL, so it is
+  75 MHz only on a 1200 MHz IO PLL; 62.5 MHz (1000 MHz IO PLL) is timing-safe, just slower. Above
+  75 MHz stage 1 fails: timing was closed at 75. Never set `Clocks.fclk0_mhz` by hand.
 - **Stage 2** also writes `CFG[14]` and reads it back. If it fails with "CFG[14] (linear) reads
   back 0", the board is running a **pre-2026-10-23 bitstream**: copy `vfi.bit` and `vfi.hwh` again.
 - **Stage 3 passes but 4 fails:** the old 16 KB DMA cap. The wrong `.bit` again.
@@ -83,8 +89,9 @@ On a failure, the script names the first layer that differs:
 python3 perf.py
 ```
 
-This reports one conv1 pass against the PL floor of 1.00 ms, then the full network: milliseconds per
-frame pair, per-layer time, and the PL floor per layer. The full-network number is the demo's
+This reports one conv1 pass against the PL floor (1.00 ms at 75 MHz), then the full network:
+milliseconds per frame pair, per-layer time, and the PL floor per layer. Floors use the measured
+`FCLK0` (first line, `PL clock`); if it says `ASSUMED`, the clock couldn't be read and 75 MHz was used. The full-network number is the demo's
 throughput.
 
 ## 6. The demo
