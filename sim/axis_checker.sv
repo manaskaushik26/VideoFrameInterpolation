@@ -4,7 +4,7 @@
 //
 // Bind or instantiate this on any stream and it reports violations as they
 // happen. Every rule below corresponds to a defect that shipped in the
-// superseded design (PROJECT_CONTEXT.md section 6.2) and that its testbenches
+// superseded design (docs/PROJECT_CONTEXT.md section 6.2) and that its testbenches
 // did not catch, because they only ever ran at full rate where none of these
 // are observable.
 //

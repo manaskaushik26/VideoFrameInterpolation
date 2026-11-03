@@ -5,7 +5,7 @@ Replaces the original Videoframeinterplotation.py. That script trained a network
 hardware cannot run, so its 20.29 dB was a float-model number that does not survive
 deployment. What changed, and why (each measured, see train/README.md):
 
-  1. No bias in conv1..conv5.  The RTL has no bias anywhere (CLAUDE.md). The original
+  1. No bias in conv1..conv5.  The RTL has no bias anywhere (rtl/). The original
      model used biases up to 0.40 in every layer; deleting them, which is what the
      hardware does, drops it from 20.45 dB to 16.74 dB -- barely above a plain 50/50
      blend of the two frames (15.97 dB). The flow layer keeps its bias, added
@@ -29,7 +29,7 @@ deployment. What changed, and why (each measured, see train/README.md):
      Here 10% of sequences are never trained on, and PSNR is per frame, against the
      no-model baselines, so the number means something.
 
-Usage (GPU strongly recommended; see CLAUDE.md -- this machine has no CUDA):
+Usage (GPU strongly recommended; CPU training at 112x112 is slow):
 
     python train_vfi.py --mnist mnist_test_seq.npy --out run_mnist
     python train_vfi.py --videos path/to/mp4s       --out run_video    # real RGB video

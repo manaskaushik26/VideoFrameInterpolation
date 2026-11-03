@@ -21,7 +21,7 @@
 param(
     [string[]] $Modules,
     [string]   $RtlDir   = "rtl",
-    [string]   $OssRoot  = "C:\Users\manas\Downloads\oss-cad-suite"
+    [string]   $OssRoot  = "$env:USERPROFILE\Downloads\oss-cad-suite"
 )
 
 $repo = Split-Path $PSScriptRoot -Parent

@@ -44,7 +44,7 @@
 // Do not "simplify" this to read on m_ch. That would be a cycle late, and every
 // output pixel would be convolved with the previous channel's kernel.
 //
-// Weights load through a simple write port. DMA loading (PROJECT_CONTEXT.md
+// Weights load through a simple write port. DMA loading (docs/PROJECT_CONTEXT.md
 // section 11 step 4, replacing 186k MMIO writes) wraps this later.
 //
 module conv_layer #(

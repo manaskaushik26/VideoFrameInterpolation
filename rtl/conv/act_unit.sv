@@ -5,7 +5,7 @@
 // Purely combinational, no handshake of its own: it sits between a producer and
 // a consumer without disturbing their valid/ready.
 //
-// This is the one module the CNN -> SNN swap touches (PROJECT_CONTEXT.md
+// This is the one module the CNN -> SNN swap touches (docs/PROJECT_CONTEXT.md
 // section 10). The conv engine, line buffers, weight memory, DMA and host code
 // all survive that change unaltered; only MODE changes here, plus an outer
 // timestep loop. Keeping the activation a separate, zero-latency module is what

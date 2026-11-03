@@ -86,7 +86,7 @@ and convert to pixels as `q15 / 32768 * flow_px_per_unit` before `cv2.remap`.
 ## Real-video training data (2026-10-23)
 
 The MNIST-trained export does not transfer to real footage. On `sample.mp4` it loses to the 50/50
-blend on 15 of 15 triplets (`STATUS.md`, step 4). It needs real video with real motion.
+blend on 15 of 15 triplets (`docs/STATUS.md`, step 4). It needs real video with real motion.
 
 ### Recommended: UCF101, filtered by `pick_clips.py`
 

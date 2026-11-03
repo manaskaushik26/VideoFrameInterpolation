@@ -122,10 +122,11 @@ syn/          build.tcl (project + block design + bitstream), PS7 config, OOC sc
 model/        bit-exact numpy reference model and golden-dump generators
 host/         PYNQ driver, staged bring-up, board tests, perf, demo, board-kit builder
 train/        PyTorch training matched to the hardware, Q1.15 export, real-video clip picker
+docs/         design handoff (PROJECT_CONTEXT.md) and the bring-up log (STATUS.md)
 ```
 
-The remaining top-level folders (`spike_routing/`, `lif_neuron/`, `VideoFrameInterpolation/`, …)
-are the earlier spike-routing design. It was replaced by the conv engine and is kept for history.
+The earlier spike-routing design that the conv engine replaced lives in the git tag
+[`legacy-spike-design`](../../tree/legacy-spike-design).
 
 ## Running it
 

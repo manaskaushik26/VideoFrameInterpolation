@@ -8,7 +8,7 @@
 // the cycle it takes for backpressure to propagate.
 //
 // This is the block the superseded AXI layer needed and did not have. From
-// PROJECT_CONTEXT.md section 6.2, that layer:
+// docs/PROJECT_CONTEXT.md section 6.2, that layer:
 //
 //   - deasserted TVALID after one cycle regardless of TREADY, losing beats
 //   - captured data only when TREADY was already high, dropping on backpressure

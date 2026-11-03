@@ -4,7 +4,7 @@
 //
 // The superseded IP had no AXI-Lite interface at all: only clk, rst_n, s_axis
 // and m_axis. Every ctrl.write() in the host notebook was therefore impossible
-// as written (PROJECT_CONTEXT.md section 7). This is that interface.
+// as written (docs/PROJECT_CONTEXT.md section 7). This is that interface.
 //
 // Register map (byte addresses, 32-bit access)
 // -------------------------------------------

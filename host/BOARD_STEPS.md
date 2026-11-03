@@ -107,7 +107,7 @@ whose four columns are: frame t | 50/50 blend | model | true frame t+1.
 Copy `sample_2x.mp4` and `side_by_side.png` back to the PC to watch them.
 
 **Expect the model to look worse than the blend on this clip.** It was trained only on Moving MNIST
-(grey digits on black) and invents motion on real footage — measured in simulation, see `STATUS.md`
+(grey digits on black) and invents motion on real footage — measured in simulation, see `docs/STATUS.md`
 step 4. The board computes exactly what the simulation computes, so this is a property of the
 weights, not the hardware. A model trained with `train_vfi.py --videos` on real clips is what fixes
 it.

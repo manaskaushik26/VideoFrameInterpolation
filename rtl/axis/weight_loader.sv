@@ -3,9 +3,9 @@
 // weight_loader -- streams a layer's kernels in over AXI-Stream and writes them
 // into conv_layer's weight memory.
 //
-// This replaces per-value MMIO writes. The host code in snnvfi/jupyter.ipynb
+// This replaces per-value MMIO writes. The old host notebook (tag legacy-spike-design)
 // wrote one weight at a time over AXI-Lite -- 186,624 writes per load, and
-// against an interface the IP did not even have (PROJECT_CONTEXT.md section 7).
+// against an interface the IP did not even have (docs/PROJECT_CONTEXT.md section 7).
 // A DMA'd blob is one descriptor.
 //
 // Stream order matches the .bin files exactly

@@ -1,7 +1,7 @@
 """
 vfi_ref -- bit-exact software reference for the VFI convolution datapath.
 
-This is the golden model PROJECT_CONTEXT.md section 13 calls the highest-value thing to
+This is the golden model docs/PROJECT_CONTEXT.md section 13 calls the highest-value thing to
 build after the conv engine: the thing that makes "is the RTL right?" a decidable
 question instead of an opinion. It reproduces the hardware's arithmetic exactly --
 same accumulator width, same rounding, same saturation, same activation -- so RTL
@@ -235,7 +235,7 @@ def output_passes(c_out, n_out=N_OUT_MAX):
 
 # ---------------------------------------------------------------- the network
 
-# (name, c_in, c_out, act_mode) -- shapes from PROJECT_CONTEXT.md section 4.3.
+# (name, c_in, c_out, act_mode) -- shapes from docs/PROJECT_CONTEXT.md section 4.3.
 NETWORK = [
     ("conv1",   6,  32, ACT_RELU),
     ("conv2",  32,  64, ACT_RELU),

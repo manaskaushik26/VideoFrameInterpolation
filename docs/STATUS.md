@@ -21,7 +21,7 @@ mismatches.**
 
 ### What was imported
 
-`C:\Users\manas\Downloads\export.zip` was unzipped into `train/export_gpu/`, with `golden/` kept
+The GPU run's `export.zip` was unzipped into `train/export_gpu/`, with `golden/` kept
 inside. The file layout is described in `train/export_gpu/LAYOUT.md`. Nothing was retrained.
 
 - Shifts: conv1 12, conv2 12, conv3 12, conv4 14, conv5 15, flow 18. Flow bias `[3, -2]`.
@@ -124,7 +124,7 @@ the flow layer only.
   - `bringup.py` stage 2 now writes and reads the bit, and names the problem.
 - **Documentation:**
   - `rtl/axis/axil_regs.sv` header;
-  - the `CLAUDE.md` register map and `act_unit` entry;
+  - the documented register map and `act_unit` entry;
   - `vfi_driver.py` (`CFG_LINEAR`, and `VfiLayer(..., linear=)` filled in from `vfi_model.json`'s
     `act` by `load_model`).
 
@@ -168,16 +168,16 @@ The 2026-08-31 build in `vfi_build` is untouched.
 | DSP / BRAM / LUT / FF | 216 / 67 / 20,956 / 24,182 | — |
 
 - **The worst path is unchanged.** It is `u_lb/chq_reg → g_mac[8].u_mac/prod_q_reg`, the known
-  line-buffer→MAC broadcast route in `CLAUDE.md`, not the new logic. So the drop from +0.081 to
+  line-buffer→MAC broadcast route (see the README), not the new logic. So the drop from +0.081 to
   +0.014 ns is place-and-route variation on that path. It still passes, but the margin is now 0.1%
-  of the period. The real fix remains pipelining that broadcast (`CLAUDE.md`).
+  of the period. The real fix remains pipelining that broadcast.
 - **`cfg_linear` is real hardware.** In the routed netlist it is `u_regs/cfg_linear_reg`, which
   Vivado replicated as `_rep` and `_rep__0` to drive its fanout. So it was not optimised away.
 - **Synthesis is clean for our RTL.** The only 8-7023 warnings come from Xilinx IP (ps7, DMAs,
   smartconnect), which `build.tcl` scopes out on purpose.
 - **`build.tcl` exited 1 after the bitstream, in `write_hw_platform` (the XSA).** It could not
   delete its `.Xil` temp folder because I had launched Vivado from `build/vivado_log`, which is
-  inside OneDrive — the trap `CLAUDE.md` documents.
+  inside OneDrive — the trap `syn/build.tcl` documents.
   - **Fixed:** `build.tcl` now `cd`s into the output directory.
   - The XSA was then written by a separate batch, run from outside OneDrive:
     `%LOCALAPPDATA%\vfi_build_20261023\vfi.xsa`.
@@ -317,7 +317,7 @@ The model loses to the blend on **15 of 15** triplets.
 
 ## Step 5 — the board kit (2026-10-23)
 
-**Location:** `C:\Users\manas\OneDrive\Desktop\vfi_board_kit\`, assembled by
+**Location:** `vfi_board_kit/`, outside the repo, assembled by
 `python host/make_kit.py --build %LOCALAPPDATA%\vfi_build_20261023`.
 
 ### Contents
@@ -424,4 +424,4 @@ rebuild since August), and this STATUS commit follows.
    asked me not to do now, and a demo clip that actually moves. Nothing else changes: RTL, bitstream,
    driver and demo all take a new export as-is.
 3. **Timing margin is +0.014 ns.** It passes, but any RTL change needs a post-route re-check.
-   Pipelining the line-buffer → MAC broadcast (`CLAUDE.md`) is the fix if it ever goes negative.
+   Pipelining the line-buffer → MAC broadcast is the fix if it ever goes negative.

@@ -11,7 +11,7 @@ param(
     [Parameter(Mandatory=$true)][string]   $Tb,
     [Parameter(Mandatory=$true)][string[]] $Sources,
     [hashtable] $Defines = @{},
-    [string]    $VivadoBin = "C:\Users\manas\Downloads\2025.1\Vivado\bin",
+    [string]    $VivadoBin = "$env:USERPROFILE\Downloads\2025.1\Vivado\bin",
     [switch]    $KeepGoing
 )
 

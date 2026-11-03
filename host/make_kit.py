@@ -2,7 +2,8 @@
 make_kit -- assemble the board kit: everything the PYNQ-Z2 needs, in one folder.
 
     python host/make_kit.py --build %LOCALAPPDATA%\\vfi_build_20261023 \\
-                            --kit   %USERPROFILE%\\OneDrive\\Desktop\\vfi_board_kit
+                            --kit   %USERPROFILE%\\OneDrive\\Desktop\\vfi_board_kit \\
+                            --video path\\to\\clip.mp4      (optional demo clip)
 
 Re-run after EVERY bitstream rebuild, or the board silently runs an old .bit.
 
@@ -59,7 +60,8 @@ def main(argv=None):
     ap.add_argument("--kit", default=os.path.join(os.path.expanduser("~"), "OneDrive",
                                                   "Desktop", "vfi_board_kit"))
     ap.add_argument("--export", default=os.path.join(REPO, "train", "export_gpu"))
-    ap.add_argument("--video", default=r"C:\Users\manas\Downloads\snnvfi\videos\sample.mp4")
+    ap.add_argument("--video", default=None,
+                    help="optional demo clip, copied into the kit as sample.mp4")
     a = ap.parse_args(argv)
 
     bit = os.path.join(a.build, "vfi.bit")
@@ -105,10 +107,10 @@ def main(argv=None):
     shutil.copy2(os.path.join(HERE, "BOARD_STEPS.md"), a.kit)
     for f in EXPORT_FILES:
         shutil.copy2(os.path.join(a.export, f), os.path.join(a.kit, "export_gpu", f))
-    if os.path.exists(a.video):
+    if a.video and os.path.exists(a.video):
         shutil.copy2(a.video, os.path.join(a.kit, "sample.mp4"))
     else:
-        print("note: no %s -- copy a video to the board yourself" % a.video)
+        print("note: no --video clip -- copy a video to the board yourself")
 
     files = []
     for root, _, names in os.walk(a.kit):

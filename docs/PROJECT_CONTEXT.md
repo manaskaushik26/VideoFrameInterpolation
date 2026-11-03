@@ -79,7 +79,7 @@ fetch a "previous frame," which is **redundant**. Both frames are already in the
 
 ## 4. What exists — asset inventory
 
-### 4.1 `C:\Users\manas\VFI FPGA\` — Vivado projects
+### 4.1 `VFI FPGA/` — Vivado projects (now in tag `legacy-spike-design`)
 
 | Path | What it is |
 |---|---|
@@ -100,7 +100,7 @@ RTL modules actually in the main project's source set:
 `top_axis` → `top` → { `fsm_global`, `frame_assembler`, `frame_buffer`, `input_adapter`,
 `spike_router`, `synapse_fifo`, `synapse_accumulator`, `lif_neuron`, `readout` }
 
-### 4.2 `C:\Users\manas\Downloads\snnvfi\` — model + host code
+### 4.2 `snnvfi/` — model + host code (now in tag `legacy-spike-design`)
 
 ```
 jupyter.ipynb                 full PYNQ host pipeline (load bitstream, DMA, pre/post process)
