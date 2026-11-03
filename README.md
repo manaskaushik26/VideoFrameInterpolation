@@ -178,4 +178,6 @@ Next:
 
 ## Authors
 
-PL side (RTL, AXI/DMA, verification): Manas. PS side (model training, host software): collaborator.
+- **Manas**: hardware. RTL design of the conv engine, AXI-Stream / AXI-DMA integration, verification
+  (testbenches, bit-exact regression), Vivado build and timing closure.
+- **Piyush Sharma**: Python side only. Model training and host software.
