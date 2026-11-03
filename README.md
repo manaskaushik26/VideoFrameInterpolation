@@ -180,4 +180,4 @@ Next:
 
 - **Manas**: hardware. RTL design of the conv engine, AXI-Stream / AXI-DMA integration, verification
   (testbenches, bit-exact regression), Vivado build and timing closure.
-- **Piyush Sharma**: Python side only. Model training and host software.
+- **Piyush Sharma**: Python side. Model training and host software.
